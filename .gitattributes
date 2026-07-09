@@ -1,4 +1,3 @@
-* text=auto eol=lf
+# Go sources are stored LF in the repo regardless of checkout platform, so the
+# committed blob is gofmt-clean on Windows (CRLF working copies) too.
 *.go text eol=lf
-*.md text eol=lf
-go.mod text eol=lf

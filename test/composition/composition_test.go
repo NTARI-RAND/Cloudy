@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/NTARI-RAND/Cloudy/internal/covenant"
+	"github.com/NTARI-RAND/Cloudy/internal/dispute"
 	"github.com/NTARI-RAND/Cloudy/internal/economy"
 	"github.com/NTARI-RAND/Cloudy/internal/record"
 )
@@ -155,12 +156,56 @@ func (a *recordAnchors) Sealed(exchange covenant.ExchangeRef, assessor, subject 
 		(bytes.Equal(e.Proposer, subjectKey) && bytes.Equal(e.Acceptor, assessorKey))
 }
 
+// disputeAnchors implements dispute.Anchors. It is the dispute-side twin of
+// recordAnchors: same join to the operator's record log on Entry.ID(), but the
+// dispute port speaks raw ed25519 public keys (not covenant MemberIDs), so the
+// party match compares the resolved keys directly. It REUSES the root's one
+// Entry.ID()->seq index — the same map recordAnchors holds — so a single index
+// serves both cross-layer joins; the [32]byte conversion between record.Hash
+// and dispute.ExchangeRef happens here and nowhere else.
+type disputeAnchors struct {
+	store record.Store
+	logID record.Hash
+	index map[record.Hash]uint64 // shared with recordAnchors
+}
+
+func (a *disputeAnchors) Sealed(exchange dispute.ExchangeRef, complainant, respondent ed25519.PublicKey) bool {
+	id := record.Hash(exchange)
+	seq, ok := a.index[id]
+	if !ok {
+		return false
+	}
+	e, err := a.store.At(seq)
+	if err != nil || e.ID() != id || e.Log != a.logID || !e.Verify() {
+		return false
+	}
+	return (bytes.Equal(e.Proposer, complainant) && bytes.Equal(e.Acceptor, respondent)) ||
+		(bytes.Equal(e.Proposer, respondent) && bytes.Equal(e.Acceptor, complainant))
+}
+
+// disputeMode maps the economy ledger's policy mode to dispute's DISTINCT
+// local Mode type. This is the ONLY place the two mode vocabularies meet;
+// dispute never imports economy, so the seam reads ledger.Policy().Mode and
+// hands the ruling the corresponding dispute.Mode.
+func disputeMode(t *testing.T, m economy.Mode) dispute.Mode {
+	t.Helper()
+	switch m {
+	case economy.ModeEscrow:
+		return dispute.ModeEscrow
+	case economy.ModeCredit:
+		return dispute.ModeCredit
+	}
+	t.Fatalf("unmappable economy mode %q", m)
+	return 0
+}
+
 // Compile-time proof that the shared scaffolding satisfies each package's
 // out-of-band ports.
 var (
 	_ economy.Directory  = economyDirectory{}
 	_ covenant.Directory = covenantDirectory{}
 	_ covenant.Anchors   = (*recordAnchors)(nil)
+	_ dispute.Anchors    = (*disputeAnchors)(nil)
 )
 
 // stack is one fully composed Cloudy: the three JFA layers over the single
@@ -798,4 +843,259 @@ func TestAnchorsLogBinding(t *testing.T) {
 	if st.anchors.Sealed(covenant.ExchangeRef(foreign.ID()), aliceMember, bobMember) {
 		t.Fatal("Anchors anchored a verified entry bound to a foreign log; the e.Log binding check is missing")
 	}
+}
+
+// newDisputeRegistry builds a dispute.Registry over the stack's record log and
+// index: the disputeAnchors twin shares the SAME Entry.ID()->seq index the
+// covenant recordAnchors uses, so one index serves both cross-layer joins.
+func newDisputeRegistry(t *testing.T, st *stack, adjudicators []ed25519.PublicKey, threshold int) *dispute.Registry {
+	t.Helper()
+	da := &disputeAnchors{store: st.recStore, logID: st.anchors.logID, index: st.anchors.index}
+	reg, err := dispute.NewRegistry(
+		dispute.Charter{Platform: platform, Adjudicators: adjudicators, Threshold: threshold},
+		da, dispute.NewMemStore())
+	if err != nil {
+		t.Fatalf("dispute.NewRegistry: %v", err)
+	}
+	return reg
+}
+
+// sealArtifactIntoRecord mirrors an admitted dispute artifact into the
+// operator's record log for tamper-evidence: the artifact's canonical bytes go
+// into a member-local Locker, and only their HashContent enters the commons as
+// the Content of a new dialog-sealed Entry between the two named parties. This
+// is the JFA no-PII discipline: the narrative never touches the record, only
+// its hash. Returns the appended entry.
+func sealArtifactIntoRecord(t *testing.T, st *stack, artifactBytes []byte, pPub ed25519.PublicKey, pPriv ed25519.PrivateKey, aPub ed25519.PublicKey, aPriv ed25519.PrivateKey, at time.Time) record.Entry {
+	t.Helper()
+	locker := record.NewMemLocker()
+	content := locker.Put(artifactBytes)
+	if content != record.HashContent(artifactBytes) {
+		t.Fatal("Locker.Put and HashContent disagree on the artifact hash")
+	}
+	e := sealEntry(t, st.anchors.logID, pPub, pPriv, aPub, aPriv, content, at)
+	st.appendEntry(t, e)
+	if e.Content != record.HashContent(artifactBytes) {
+		t.Fatal("sealed entry Content is not the artifact hash")
+	}
+	return e
+}
+
+// TestDisputeDomainEndToEnd exercises the dispute domain seam end to end: the
+// record.Hash <-> dispute.ExchangeRef conversion, the dispute.Anchors gate on
+// Open, the economy.Mode -> dispute.Mode mapping, and the two mode-aware
+// resolution paths — escrow escalation (moves no money) and credit
+// (reputational overlay plus a VOLUNTARY refund that dispute can never force) —
+// each with its artifact sealed into the record for tamper-evidence.
+func TestDisputeDomainEndToEnd(t *testing.T) {
+	t.Run("escrow escalation moves no money and seals into record", func(t *testing.T) {
+		comPub, comPriv := genKey(t) // complainant
+		resPub, resPriv := genKey(t) // respondent
+		intakePub, intakePriv := genKey(t)
+		adj1Pub, adj1 := genKey(t)
+		adj2Pub, adj2 := genKey(t)
+		operatorPub, operatorPriv := genKey(t)
+		_, witnessPriv := genKey(t)
+		_, stewardPriv := genKey(t)
+
+		dir := newMemberDirectory(platform)
+		comAcct, _ := dir.register(comPub)
+		resAcct, _ := dir.register(resPub)
+		st := newStack(t, dir, operatorPub, []ed25519.PrivateKey{stewardPriv}, 1)
+		reg := newDisputeRegistry(t, st, []ed25519.PublicKey{adj1Pub, adj2Pub}, 2)
+
+		// The disputed exchange: a sealed record entry between the two members.
+		entry := sealEntry(t, st.anchors.logID, comPub, comPriv, resPub, resPriv,
+			record.HashContent([]byte("com paid res for a service")), time.Now().UTC())
+		st.appendEntry(t, entry)
+		exRef := dispute.ExchangeRef(entry.ID())
+
+		// The Anchors gate rejects a fabricated exchange (the [32]byte conversion
+		// and the party/log binding both live at this seam).
+		var fabricated dispute.ExchangeRef
+		for i := range fabricated {
+			fabricated[i] = 0xAB
+		}
+		badOpening, err := dispute.NewOpening(platform, comPub, resPub, fabricated, [32]byte{}, time.Now().UTC())
+		if err != nil {
+			t.Fatalf("NewOpening: %v", err)
+		}
+		if err := badOpening.Sign(comPriv); err != nil {
+			t.Fatalf("Sign: %v", err)
+		}
+		if _, err := reg.Open(badOpening); !errors.Is(err, dispute.ErrInvalid) {
+			t.Fatalf("Open(fabricated exchange) = %v, want ErrInvalid from the Anchors gate", err)
+		}
+
+		// Open the real dispute; the reason text stays member-local (only its
+		// hash rides in the commons).
+		reason := record.NewMemLocker()
+		reasonHash := reason.Put([]byte("the deliverable never arrived"))
+		opening, err := dispute.NewOpening(platform, comPub, resPub, exRef, [32]byte(reasonHash), time.Now().UTC())
+		if err != nil {
+			t.Fatalf("NewOpening: %v", err)
+		}
+		if err := opening.Sign(comPriv); err != nil {
+			t.Fatalf("Sign: %v", err)
+		}
+		id, err := reg.Open(opening)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+
+		// Seal the opening into the record: complainant (proposer) + intake staff
+		// (acceptor). The acceptor seal is acknowledgment/service, NOT consent.
+		sealArtifactIntoRecord(t, st, opening.CanonicalBytes(), comPub, comPriv, intakePub, intakePriv, time.Now().UTC())
+
+		// The seam maps the ledger's escrow mode onto the ruling.
+		if got := disputeMode(t, st.ledger.Policy().Mode); got != dispute.ModeEscrow {
+			t.Fatalf("mode mapping = %v, want ModeEscrow", got)
+		}
+
+		// A four-eyes escrow ruling: a staff-signed directive to the coordinator
+		// with an OPAQUE Units quantity — no economy.Amount, no fiat.
+		rationaleHash := record.HashContent([]byte("panel directs the coordinator to refund the complainant"))
+		ruling := dispute.NewEscrowRuling(platform, id, exRef, dispute.FindingForComplainant,
+			dispute.ActionRefundComplainant, 7, [32]byte(rationaleHash), time.Now().UTC())
+		ruling.Sign(adj1)
+		ruling.Sign(adj2)
+		if err := reg.Rule(ruling); err != nil {
+			t.Fatalf("Rule: %v", err)
+		}
+
+		// Cloudy structurally cannot move escrowed fiat: a credit spend is refused
+		// and no balance moves — the ruling is a directive, not a settlement.
+		spend := economy.Spend{Platform: platform, From: comAcct, To: resAcct, Amount: 1,
+			ExchangeHash: [32]byte(entry.ID()), IssuedAt: time.Now().UTC(), Nonce: 1}
+		spend.Sign(comPriv)
+		if err := st.ledger.Post(spend); !errors.Is(err, economy.ErrCreditDisabled) {
+			t.Fatalf("Post under escrow = %v, want ErrCreditDisabled", err)
+		}
+		if st.ledger.Balance(comAcct) != 0 || st.ledger.Balance(resAcct) != 0 {
+			t.Fatal("escrow escalation moved credit; Cloudy must move no money in escrow mode")
+		}
+
+		// Seal the ruling into the record via two panel adjudicators (four-eyes),
+		// then checkpoint and have an independent witness countersign.
+		rulingEntry := sealArtifactIntoRecord(t, st, ruling.CanonicalBytes(), adj1Pub, adj1, adj2Pub, adj2, time.Now().UTC())
+		cp := st.log.Checkpoint(time.Now().UTC())
+		cp.Sign(operatorPriv)
+		wit := record.NewWitness(witnessPriv)
+		cs, err := wit.Countersign(cp, operatorPub, nil)
+		if err != nil {
+			t.Fatalf("witness countersign: %v", err)
+		}
+		wcp := record.WitnessedCheckpoint{Checkpoint: cp, Countersignatures: []record.Countersignature{cs}}
+		if !wcp.Verify(operatorPub) {
+			t.Fatal("witnessed checkpoint over the dispute trail does not verify")
+		}
+		if rulingEntry.Content != record.HashContent(ruling.CanonicalBytes()) {
+			t.Fatal("ruling record entry does not commit to the ruling's canonical bytes")
+		}
+
+		// The case is resolved with the escalation directive intact.
+		c, err := reg.Case(id)
+		if err != nil {
+			t.Fatalf("Case: %v", err)
+		}
+		if c.State() != dispute.StateResolved {
+			t.Fatalf("state = %v, want StateResolved", c.State())
+		}
+		rem, ok := c.Remedy()
+		if !ok || rem.Escalation == nil || rem.Escalation.Action != dispute.ActionRefundComplainant || rem.Escalation.Units != 7 {
+			t.Fatalf("escrow remedy shape wrong: %+v", rem)
+		}
+	})
+
+	t.Run("credit reputational overlay and voluntary refund, never forced clawback", func(t *testing.T) {
+		comPub, comPriv := genKey(t) // complainant = original payer
+		resPub, resPriv := genKey(t) // respondent = original payee
+		adj1Pub, adj1 := genKey(t)
+		adj2Pub, adj2 := genKey(t)
+		operatorPub, _ := genKey(t)
+		_, stewardPriv := genKey(t)
+
+		dir := newMemberDirectory(platform)
+		comAcct, _ := dir.register(comPub)
+		resAcct, _ := dir.register(resPub)
+		st := newStack(t, dir, operatorPub, []ed25519.PrivateKey{stewardPriv}, 1)
+		st.enactCredit(t, 100, 1, time.Now().UTC())
+		reg := newDisputeRegistry(t, st, []ed25519.PublicKey{adj1Pub, adj2Pub}, 2)
+
+		// The disputed exchange: sealed entry plus the original credit spend
+		// (complainant pays respondent 7).
+		entry := sealEntry(t, st.anchors.logID, comPub, comPriv, resPub, resPriv,
+			record.HashContent([]byte("com paid res 7 credit for a service")), time.Now().UTC())
+		st.appendEntry(t, entry)
+		orig := economy.Spend{Platform: platform, From: comAcct, To: resAcct, Amount: 7,
+			ExchangeHash: [32]byte(entry.ID()), IssuedAt: time.Now().UTC(), Nonce: 1}
+		orig.Sign(comPriv)
+		if err := st.ledger.Post(orig); err != nil {
+			t.Fatalf("Post original spend: %v", err)
+		}
+		if st.ledger.Balance(comAcct) != -7 || st.ledger.Balance(resAcct) != 7 {
+			t.Fatalf("post-spend balances: com=%d res=%d, want -7/+7", st.ledger.Balance(comAcct), st.ledger.Balance(resAcct))
+		}
+
+		exRef := dispute.ExchangeRef(entry.ID())
+		opening, err := dispute.NewOpening(platform, comPub, resPub, exRef, [32]byte{}, time.Now().UTC())
+		if err != nil {
+			t.Fatalf("NewOpening: %v", err)
+		}
+		if err := opening.Sign(comPriv); err != nil {
+			t.Fatalf("Sign: %v", err)
+		}
+		id, err := reg.Open(opening)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+
+		// The seam maps the ledger's credit mode onto the ruling.
+		if got := disputeMode(t, st.ledger.Policy().Mode); got != dispute.ModeCredit {
+			t.Fatalf("mode mapping = %v, want ModeCredit", got)
+		}
+
+		// A credit ruling for the complainant: expunge the harm as an adjudicated
+		// overlay (NOT a covenant deletion) and direct a voluntary refund of 7.
+		ruling := dispute.NewCreditRuling(platform, id, exRef, dispute.FindingForComplainant,
+			dispute.HarmExpunged, &dispute.RefundDirective{Units: 7}, [32]byte{}, time.Now().UTC())
+		ruling.Sign(adj1)
+		ruling.Sign(adj2)
+		if err := reg.Rule(ruling); err != nil {
+			t.Fatalf("Rule: %v", err)
+		}
+		c, err := reg.Case(id)
+		if err != nil {
+			t.Fatalf("Case: %v", err)
+		}
+		rem, ok := c.Remedy()
+		if !ok || rem.Harm != dispute.HarmExpunged || rem.Refund == nil || rem.Refund.Units != 7 {
+			t.Fatalf("credit remedy shape wrong: %+v", rem)
+		}
+
+		// The refund is a NEW payee-signed Spend (original payee res -> original
+		// payer com), which the seam builds UNSIGNED. Direction is implied by the
+		// Finding (for the complainant -> back to the complainant). Forced
+		// clawback is impossible: the unsigned template is refused, and balances
+		// do not move.
+		refund := economy.Spend{Platform: platform, From: resAcct, To: comAcct,
+			Amount: economy.Amount(rem.Refund.Units), ExchangeHash: [32]byte(entry.ID()),
+			IssuedAt: time.Now().UTC(), Nonce: 1}
+		if err := st.ledger.Post(refund); !errors.Is(err, economy.ErrSignature) {
+			t.Fatalf("unsigned refund Post = %v, want ErrSignature (dispute cannot force a clawback)", err)
+		}
+		if st.ledger.Balance(comAcct) != -7 || st.ledger.Balance(resAcct) != 7 {
+			t.Fatal("a failed forced refund moved balances")
+		}
+
+		// Only when the payee (respondent) signs VOLUNTARILY does the refund
+		// settle.
+		refund.Sign(resPriv)
+		if err := st.ledger.Post(refund); err != nil {
+			t.Fatalf("voluntary refund Post: %v", err)
+		}
+		if st.ledger.Balance(comAcct) != 0 || st.ledger.Balance(resAcct) != 0 {
+			t.Fatalf("post-refund balances: com=%d res=%d, want 0/0", st.ledger.Balance(comAcct), st.ledger.Balance(resAcct))
+		}
+	})
 }

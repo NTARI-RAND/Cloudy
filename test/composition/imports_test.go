@@ -1,10 +1,10 @@
 // imports_test.go is the import-graph tripwire for the JFA layering rule:
-// internal/economy, internal/covenant, and internal/record never import each
-// other (or anything else in this module), and only the two composition roots
-// — cmd/cloudy and test/composition — may ever see more than one of them.
-// The check is a pure go/parser + filepath.Walk scan (no subprocess, no
-// go/build): every .go file in the module is parsed in ImportsOnly mode and
-// grouped by directory.
+// internal/economy, internal/covenant, internal/record, and internal/dispute
+// never import each other (or anything else in this module), and only the two
+// composition roots — cmd/cloudy and test/composition — may ever see more than
+// one of them. The check is a pure go/parser + filepath.Walk scan (no
+// subprocess, no go/build): every .go file in the module is parsed in
+// ImportsOnly mode and grouped by directory.
 package composition_test
 
 import (
@@ -20,12 +20,13 @@ import (
 
 const modulePath = "github.com/NTARI-RAND/Cloudy"
 
-// jfaImportPaths are the three JFA member-economy packages the layering rule
+// jfaImportPaths are the four JFA member-economy packages the layering rule
 // is about.
 var jfaImportPaths = []string{
 	modulePath + "/internal/economy",
 	modulePath + "/internal/covenant",
 	modulePath + "/internal/record",
+	modulePath + "/internal/dispute",
 }
 
 // moduleRoot walks up from the test's working directory (the package dir) to
@@ -106,9 +107,9 @@ func TestImportGraph(t *testing.T) {
 		t.Fatal("parsed zero .go files; the walk itself is broken")
 	}
 
-	// (a) The three JFA packages import NO package from this module at all —
+	// (a) The four JFA packages import NO package from this module at all —
 	// not each other, not coord, nothing under github.com/NTARI-RAND/Cloudy.
-	for _, jfaDir := range []string{"internal/economy", "internal/covenant", "internal/record"} {
+	for _, jfaDir := range []string{"internal/economy", "internal/covenant", "internal/record", "internal/dispute"} {
 		set, ok := imports[jfaDir]
 		if !ok {
 			t.Fatalf("no .go files found under %s; the walk missed a JFA package", jfaDir)
@@ -139,7 +140,7 @@ func TestImportGraph(t *testing.T) {
 		if n > 1 {
 			roots = append(roots, dir)
 			if !allowedRoots[dir] {
-				t.Errorf("%s imports %d of the three JFA packages; only cmd/cloudy and test/composition may compose them", dir, n)
+				t.Errorf("%s imports %d of the four JFA packages; only cmd/cloudy and test/composition may compose them", dir, n)
 			}
 		}
 	}

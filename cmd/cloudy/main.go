@@ -23,6 +23,7 @@ import (
 
 	"github.com/NTARI-RAND/Cloudy/internal/coord"
 	"github.com/NTARI-RAND/Cloudy/internal/covenant"
+	"github.com/NTARI-RAND/Cloudy/internal/dispute"
 	"github.com/NTARI-RAND/Cloudy/internal/economy"
 	"github.com/NTARI-RAND/Cloudy/internal/record"
 )
@@ -121,6 +122,33 @@ func (a *recordAnchors) Sealed(exchange covenant.ExchangeRef, assessor, subject 
 		(bytes.Equal(e.Proposer, subjectKey) && bytes.Equal(e.Acceptor, assessorKey))
 }
 
+// disputeAnchors implements dispute.Anchors, the dispute-side twin of
+// recordAnchors: the same join to the operator's record log on Entry.ID(), but
+// the dispute port speaks raw ed25519 public keys (not covenant MemberIDs), so
+// the party match compares the resolved keys directly. It REUSES the root's
+// one Entry.ID()->seq index (the same map recordAnchors holds), so a single
+// index serves both cross-layer joins; the [32]byte conversion between
+// record.Hash and dispute.ExchangeRef happens here and nowhere else.
+type disputeAnchors struct {
+	store record.Store
+	logID record.Hash
+	index map[record.Hash]uint64 // shared with recordAnchors
+}
+
+func (a *disputeAnchors) Sealed(exchange dispute.ExchangeRef, complainant, respondent ed25519.PublicKey) bool {
+	id := record.Hash(exchange)
+	seq, ok := a.index[id]
+	if !ok {
+		return false
+	}
+	e, err := a.store.At(seq)
+	if err != nil || e.ID() != id || e.Log != a.logID || !e.Verify() {
+		return false
+	}
+	return (bytes.Equal(e.Proposer, complainant) && bytes.Equal(e.Acceptor, respondent)) ||
+		(bytes.Equal(e.Proposer, respondent) && bytes.Equal(e.Acceptor, complainant))
+}
+
 // operatorLog couples the operator's record.Log with the anchors index.
 // appendEntry is the ONLY append path any ingress may use: calling
 // record.Log.Append directly would persist the entry without indexing it,
@@ -202,6 +230,28 @@ func main() {
 	}
 	_ = book // constructed and live; assessments have no ingress until members exist
 
+	// The dispute registry composes the fourth JFA leaf over the same operator
+	// log: its Anchors twin shares the one Entry.ID()->seq index, so disputes
+	// gate on the same sealed exchanges. The adjudicator PRIVATE key is
+	// discarded like the steward's — no ruling is signable in this process — and
+	// a single-adjudicator charter cannot dialog-seal rulings into the record
+	// (that path wants Threshold>=2), so tamper-evidence here is the registry's
+	// own append-only Store until a real staff panel exists.
+	adjudicatorPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		log.Fatalf("cloudy: generating ephemeral adjudicator key: %v", err)
+	}
+	dispAnchors := &disputeAnchors{store: recStore, logID: record.LogID(operatorPub), index: anchors.index}
+	registry, err := dispute.NewRegistry(dispute.Charter{
+		Platform:     platform,
+		Adjudicators: []ed25519.PublicKey{adjudicatorPub},
+		Threshold:    1,
+	}, dispAnchors, dispute.NewMemStore())
+	if err != nil {
+		log.Fatalf("cloudy: opening dispute registry: %v", err)
+	}
+	_ = registry // constructed and live; disputes have no ingress until members exist
+
 	c := coord.Dial(*addr)
 	_ = c // constructed and deliberately unused: there is still no live loop
 
@@ -210,5 +260,6 @@ func main() {
 	log.Printf("cloudy: economy: ledger open at ModeEscrow genesis (platform %q, mode %q); the steward private key was discarded at startup, so no quorum PolicyChange — and no escrow->credit transition — is reachable in this process",
 		platform, ledger.Policy().Mode)
 	log.Printf("cloudy: covenant: book open over the shared member directory with record-anchored admission on the LBTAS scale (six levels, -1 No Trust .. +4 Delight; default categories reliability, usability, performance, support; standing read as distributions, never averaged; directory empty; no assessment ingress yet)")
+	log.Printf("cloudy: dispute: registry open over the same operator log with record-anchored Open admission (generic adjudicator charter, threshold 1; escrow rulings escalate to the coordinator and move no money, credit rulings carry a reputational overlay and only a voluntary refund directive — never a forced clawback; the adjudicator private key was discarded, so no ruling is signable and no dispute ingress exists yet)")
 	log.Printf("cloudy: coordinator client constructed for %s; no live coordination loop and no member-facing surface yet", *addr)
 }
