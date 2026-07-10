@@ -44,6 +44,7 @@ var (
 // their expected digests. Runs on the member's device at seal time, before
 // the shard leaves; the table goes in the manifest, never to the host.
 func BuildChallengeTable(sealed []byte, m int, entropy io.Reader) (*ChallengeTable, error) {
+	entropy = randOr(entropy)
 	if m < 1 {
 		return nil, fmt.Errorf("storage: challenge count must be >= 1, got %d", m)
 	}

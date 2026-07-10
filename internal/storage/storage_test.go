@@ -160,6 +160,56 @@ func TestSealOpenObjectRoundTrip(t *testing.T) {
 	}
 }
 
+// H1 regression: re-sealing DIFFERENT content under the SAME ObjectKey (the
+// edit/re-upload path) must NOT reuse a nonce. With the pre-fix index-derived
+// counter nonce, shard i of both seals shared nonce=i under one key —
+// catastrophic GCM reuse. With random per-shard nonces the sealed bytes (which
+// carry the nonce prefix) must differ, and both must still open correctly.
+func TestReSealSameKeyUsesFreshNonce(t *testing.T) {
+	coder := StandInSplitter{K: 2}
+	key, id := testKeyID(t, "reseal")
+	v1, err := SealObject(key, id, []byte("version one"), coder, newDRBG("seal-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, err := SealObject(key, id, []byte("version two, edited"), coder, newDRBG("seal-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range v1.Shards {
+		n1 := v1.Shards[i].Sealed[:nonceLen]
+		n2 := v2.Shards[i].Sealed[:nonceLen]
+		if bytes.Equal(n1, n2) {
+			t.Fatalf("shard %d reused nonce across two seals under the same key — GCM reuse", i)
+		}
+	}
+	// Both versions still decrypt to their own plaintext.
+	got1, err := OpenObject(key, id, [][]byte{v1.Shards[0].Sealed, v1.Shards[1].Sealed}, coder)
+	if err != nil || string(got1) != "version one" {
+		t.Fatalf("v1 open: %q, %v", got1, err)
+	}
+	got2, err := OpenObject(key, id, [][]byte{v2.Shards[0].Sealed, v2.Shards[1].Sealed}, coder)
+	if err != nil || string(got2) != "version two, edited" {
+		t.Fatalf("v2 open: %q, %v", got2, err)
+	}
+}
+
+// Production callers pass a nil reader and must get crypto/rand, not a panic
+// or a zero key (L3: entropy anchored to a secure default).
+func TestNilRandUsesSecureDefault(t *testing.T) {
+	k1, err := NewObjectKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k2, err := NewObjectKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k1 == (ObjectKey{}) || k1 == k2 {
+		t.Fatal("nil reader did not produce fresh random keys")
+	}
+}
+
 func TestOpenDetectsTamper(t *testing.T) {
 	coder := StandInSplitter{K: 2}
 	key, id := testKeyID(t, "tamper")

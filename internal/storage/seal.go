@@ -39,6 +39,7 @@ var (
 
 // NewObjectKey draws a fresh random object key.
 func NewObjectKey(rand io.Reader) (ObjectKey, error) {
+	rand = randOr(rand)
 	var k ObjectKey
 	if _, err := io.ReadFull(rand, k[:]); err != nil {
 		return ObjectKey{}, fmt.Errorf("storage: reading object key: %w", err)
@@ -48,6 +49,7 @@ func NewObjectKey(rand io.Reader) (ObjectKey, error) {
 
 // NewObjectID draws a fresh random object ID.
 func NewObjectID(rand io.Reader) (ObjectID, error) {
+	rand = randOr(rand)
 	var id ObjectID
 	if _, err := io.ReadFull(rand, id[:]); err != nil {
 		return ObjectID{}, fmt.Errorf("storage: reading object id: %w", err)
@@ -64,13 +66,9 @@ func gcmFor(key ObjectKey) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// shardNonce is a counter nonce: safe because every object has its own
-// random key, so (key, nonce) pairs never repeat across shards or objects.
-func shardNonce(index int) []byte {
-	n := make([]byte, 12)
-	binary.BigEndian.PutUint64(n[4:], uint64(index))
-	return n
-}
+// nonceLen is the AES-GCM standard nonce size, prepended to every sealed
+// shard.
+const nonceLen = 12
 
 // shardAAD binds a shard to its object and position so a host (or a
 // compromised relay) cannot swap shards between objects or reorder them
@@ -82,25 +80,42 @@ func shardAAD(objectID ObjectID, index int) []byte {
 	return aad
 }
 
-// sealShard encrypts one padded shard payload. All payloads in a size class
-// have identical length, and AES-GCM adds a fixed 16-byte tag, so all sealed
-// shards in a class are the same wire size — quantization survives sealing.
-func sealShard(key ObjectKey, objectID ObjectID, index int, payload []byte) (Shard, error) {
+// sealShard encrypts one padded shard payload under a FRESH RANDOM nonce drawn
+// from rand, prepended to the ciphertext (the standard random-nonce layout:
+// Sealed = nonce ‖ ciphertext‖tag). A random per-shard nonce — not a
+// deterministic counter — is what makes re-sealing safe: encrypting a
+// different plaintext under the same ObjectKey (the edit / re-upload path)
+// draws an independent nonce every time, so (key, nonce) never repeats and the
+// GCM catastrophe (recovering plaintext-XOR and the auth subkey from two
+// same-nonce ciphertexts) cannot arise even when the caller reuses a key.
+// Every sealed shard in a size class is nonceLen + class + gcmTag bytes — a
+// fixed per-class length, so quantization survives sealing.
+func sealShard(rand io.Reader, key ObjectKey, objectID ObjectID, index int, payload []byte) (Shard, error) {
 	aead, err := gcmFor(key)
 	if err != nil {
 		return Shard{}, fmt.Errorf("storage: sealing shard %d: %w", index, err)
 	}
-	sealed := aead.Seal(nil, shardNonce(index), payload, shardAAD(objectID, index))
+	nonce := make([]byte, nonceLen)
+	if _, err := io.ReadFull(rand, nonce); err != nil {
+		return Shard{}, fmt.Errorf("storage: reading shard %d nonce: %w", index, err)
+	}
+	// Seal appends ciphertext to nonce, so Sealed = nonce ‖ ciphertext‖tag.
+	sealed := aead.Seal(append([]byte(nil), nonce...), nonce, payload, shardAAD(objectID, index))
 	return Shard{Ref: sha256.Sum256(sealed), Sealed: sealed}, nil
 }
 
-// openShard authenticates and decrypts one sealed shard at a claimed index.
+// openShard authenticates and decrypts one sealed shard at a claimed index,
+// reading the random nonce from the front of sealed.
 func openShard(key ObjectKey, objectID ObjectID, index int, sealed []byte) ([]byte, error) {
 	aead, err := gcmFor(key)
 	if err != nil {
 		return nil, fmt.Errorf("storage: opening shard %d: %w", index, err)
 	}
-	payload, err := aead.Open(nil, shardNonce(index), sealed, shardAAD(objectID, index))
+	if len(sealed) < nonceLen {
+		return nil, fmt.Errorf("%w (index %d: sealed shorter than nonce)", ErrOpenShard, index)
+	}
+	nonce, ct := sealed[:nonceLen], sealed[nonceLen:]
+	payload, err := aead.Open(nil, nonce, ct, shardAAD(objectID, index))
 	if err != nil {
 		return nil, fmt.Errorf("%w (index %d)", ErrOpenShard, index)
 	}

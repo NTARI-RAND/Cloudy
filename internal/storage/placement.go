@@ -36,6 +36,7 @@ var (
 // pattern (same inputs, different entropy → different assignment). Returns
 // a slice where element i is the host for shard i.
 func PlaceShards(shardCount int, hosts []Host, entropy io.Reader) ([]Host, error) {
+	entropy = randOr(entropy)
 	if shardCount < 1 {
 		return nil, fmt.Errorf("storage: shardCount must be >= 1, got %d", shardCount)
 	}

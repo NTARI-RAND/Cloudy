@@ -11,8 +11,9 @@ import "context"
 //
 // Member-side code MUST NOT dial a host directly; there is deliberately no
 // host-addressed API anywhere in this package, so the compiler enforces
-// what the design promises. test/composition asserts the member side of
-// this package compiles without any network import.
+// what the design promises. TestNoNetworkImport (nonetwork_test.go) asserts
+// this package's non-test import graph pulls in no networking package (net,
+// net/http, …), so a future host-dialing addition fails the build.
 //
 // The wire that carries these calls is data plane — outside sohocloud-
 // protocol by its §1 scope rule ("the wire never carries stored content").

@@ -20,6 +20,7 @@ type SealedObject struct {
 // quantization), split with the coder, and seal each shard bound to its
 // object and index. Every returned shard has an identical Sealed length.
 func SealObject(key ObjectKey, id ObjectID, plain []byte, coder Coder, rand io.Reader) (SealedObject, error) {
+	rand = randOr(rand)
 	class, err := classFor(len(plain), coder.DataShards())
 	if err != nil {
 		return SealedObject{}, err
@@ -34,7 +35,7 @@ func SealObject(key ObjectKey, id ObjectID, plain []byte, coder Coder, rand io.R
 	}
 	shards := make([]Shard, len(raw))
 	for i, payload := range raw {
-		shards[i], err = sealShard(key, id, i, payload)
+		shards[i], err = sealShard(rand, key, id, i, payload)
 		if err != nil {
 			return SealedObject{}, err
 		}

@@ -24,6 +24,7 @@ type FetchStep struct {
 // The steps are returned sorted by Delay — execution order — while Index
 // carries the shuffled shard identity.
 func FetchPlan(shardCount int, window time.Duration, entropy io.Reader) ([]FetchStep, error) {
+	entropy = randOr(entropy)
 	if shardCount < 1 {
 		return nil, fmt.Errorf("storage: shardCount must be >= 1, got %d", shardCount)
 	}

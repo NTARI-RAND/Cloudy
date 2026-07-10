@@ -18,17 +18,24 @@
 //  1. Size quantization (quantize.go, object.go) — every sealed shard in a
 //     size class has an identical byte length, so shard size fingerprints
 //     nothing. Enforced by construction and by test.
-//  2. Placement and fetch decorrelation (placement.go, fetch.go) — no two
-//     shards of one object land on the same host (distinct owners
-//     preferred), and retrieval order and timing are randomized, so
-//     co-access does not regroup an object.
+//  2. Placement and fetch decorrelation (placement.go, fetch.go) — no single
+//     host ever holds two shards of one object (a HARD rule, enforced
+//     fail-closed), and retrieval order and timing are randomized, so no one
+//     host can regroup an object. Distinct owners are PREFERRED but not
+//     guaranteed: when distinct owners are scarcer than the shard count, a
+//     multi-node owner can still co-observe several shards of one object
+//     across its own hosts — the guarantee is "no single host regroups," not
+//     "no operator correlates."
 //  3. Relay boundary (relay.go) — member-side code never dials a host; all
 //     shard traffic crosses the Relay interface implemented by cloudyd, so
 //     a host sees the platform's address, never the member's.
 //  4. Audits as cover traffic (audit.go, cover.go) — proof-of-storage
 //     challenges fire on a randomized steady cadence whether or not anyone
-//     is reading, and latency-tolerant reads ride probe slots, so a host
-//     cannot distinguish interest from routine.
+//     is reading, and latency-tolerant reads ride probe slots, so within the
+//     cadence a host cannot distinguish interest from routine. The cadence is
+//     exponential but clamped (see cover.go), so it is near-memoryless rather
+//     than strictly memoryless; a read that cannot wait for the next slot
+//     steps outside it (a named residual leak below).
 //
 // Labeled stand-ins, per house discipline (name the gap, don't paper over
 // it): StandInSplitter provides NO redundancy (Reed-Solomon k-of-n is the

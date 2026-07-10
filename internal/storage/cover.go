@@ -34,6 +34,7 @@ type CoverScheduler struct {
 // interval, beginning at now. Production passes crypto/rand; tests inject
 // deterministic entropy.
 func NewCoverScheduler(mean time.Duration, now time.Time, entropy io.Reader) (*CoverScheduler, error) {
+	entropy = randOr(entropy)
 	if mean <= 0 {
 		return nil, fmt.Errorf("storage: mean interval must be positive, got %v", mean)
 	}

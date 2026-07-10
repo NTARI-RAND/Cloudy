@@ -72,6 +72,13 @@ func seedFileName(i int) string {
 // seven paths already exists, Save returns ErrKeysetFileExists (naming the
 // colliding file) BEFORE writing anything, so a collision never leaves a
 // partially overwritten keyset.
+//
+// PLATFORM NOTE: 0700/0600 are POSIX modes. On Windows, Go maps them loosely
+// onto ACLs and they do NOT produce owner-only restriction — a seed file
+// written here is not access-restricted against other local users on a
+// Windows host. A production Windows deployment MUST place the keyset dir on a
+// path already ACL-restricted to the service account (or set an explicit ACL),
+// rather than relying on these modes. Audit finding L9 (2026-07-09).
 func (ks *Keyset) Save(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("opcred: create keyset dir: %w", err)
