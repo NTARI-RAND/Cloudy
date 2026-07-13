@@ -13,7 +13,7 @@ import (
 // shard, salted by a nonce so the answer cannot be precomputed or replayed.
 // The wire envelope that will carry challenges (and the node signature over
 // responses that makes them payable, non-repudiable metering facts) is SCP
-// v0.3 scope — see Development/SCP-completion-roadmap.md. This file is the
+// v0.3 scope — see the SCP completion roadmap (sohocloud-protocol repo; NTARI-internal copy: Development/Planning/SCP-completion-roadmap.md). This file is the
 // member-side substance: what to ask and how to check the answer.
 type Challenge struct {
 	Offset int64

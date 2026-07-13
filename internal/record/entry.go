@@ -17,9 +17,9 @@ import (
 // begins with exactly one tag, so no artifact is transferable between roles
 // or message types (see doc.go for the full table).
 const (
-	domainContent = "cloudy/record/content/v0"
-	domainEntry   = "cloudy/record/entry/v0"
-	domainLeaf    = "cloudy/record/leaf/v0"
+	domainContent = "drops/content/v0"
+	domainEntry   = "drops/entry/v0"
+	domainLeaf    = "drops/leaf/v0"
 )
 
 // Hash is an opaque 32-byte SHA-256 digest: the only value other Cloudy
