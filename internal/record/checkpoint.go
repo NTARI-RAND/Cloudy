@@ -10,7 +10,7 @@ import (
 // domainCheckpoint tags checkpoint signing payloads; an operator's
 // checkpoint signature is never valid under any other tag, so it can never
 // pose as a member seal or a witness countersignature.
-const domainCheckpoint = "cloudy/record/checkpoint/v0"
+const domainCheckpoint = "drops/checkpoint/v0"
 
 // Checkpoint is an operator's signed, monotonic commitment to its log head —
 // the Certificate Transparency signed-tree-head analogue for a linear chain.

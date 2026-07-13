@@ -1,9 +1,15 @@
 // Package consumerapi is Cloudy's member-facing JSON API — the surface the
 // React Native app talks to, and the first member-facing ingress the headless
-// composition root (cmd/cloudy) said did not yet exist. It is slice 1:
-// onboarding, the Technology Tree (techtree), and the hardware Market. Economy
-// spends, disputes, settlement, contribution control, and storage are later
-// slices.
+// composition root (cmd/cloudy) said did not yet exist. Slice 1 delivered
+// onboarding, the Technology Tree (techtree), and the hardware Market; slice 2
+// adds the four-leaf member economy: Drops (the dialog-sealed record, with the
+// operator's signed checkpoint honestly labeled a single-witness stand-in),
+// LBTAS assessments anchored to sealed dialogs, payer-signed credit spends
+// (refused with a plain 409 while the governed policy is escrow mode), and
+// dispute filing/withdrawal (no adjudicator key exists in-process, so no
+// ruling is producible here). Settlement, contribution control, and storage
+// are later slices; lifecycle witnessing of disputes is Phase-3 federation
+// work and is named, not simulated.
 //
 // Trust model (the load-bearing decision, from the Phase-1 design §7.1):
 // member keys NEVER leave the member's device. Every member-authored artifact —
@@ -26,7 +32,9 @@
 package consumerapi
 
 import (
+	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -36,6 +44,8 @@ import (
 	"github.com/NTARI-RAND/sohocloud-protocol/canon"
 
 	"github.com/NTARI-RAND/Cloudy/internal/covenant"
+	"github.com/NTARI-RAND/Cloudy/internal/dispute"
+	"github.com/NTARI-RAND/Cloudy/internal/economy"
 	"github.com/NTARI-RAND/Cloudy/internal/market"
 	"github.com/NTARI-RAND/Cloudy/internal/record"
 	"github.com/NTARI-RAND/Cloudy/internal/techtree"
@@ -52,12 +62,33 @@ const domainRegister = "cloudy/consumerapi/register/v0"
 type Server struct {
 	platform string
 
-	mu       sync.Mutex
-	byMember map[covenant.MemberID]ed25519.PublicKey
-	tree     *techtree.Tree
-	catalog  *market.Catalog
-	book     *covenant.Book
-	locker   record.Locker
+	// The operator's ephemeral record-log keypair. The operator legitimately
+	// holds its own checkpoint-signing key — what it can never hold is a key
+	// that produces a member seal, a steward PolicyChange, or an adjudicator
+	// ruling; those private keys are discarded at construction, so none of
+	// those artifacts are signable in this process.
+	operatorPub  ed25519.PublicKey
+	operatorPriv ed25519.PrivateKey
+
+	mu        sync.Mutex
+	byMember  map[covenant.MemberID]ed25519.PublicKey
+	byAccount map[economy.AccountID]ed25519.PublicKey
+	tree      *techtree.Tree
+	catalog   *market.Catalog
+	book      *covenant.Book
+	locker    record.Locker
+
+	// The four-leaf member economy, composed here exactly as cmd/cloudy
+	// composes it: one shared member directory, one operator Drops log, one
+	// Entry.ID()->seq index serving both cross-layer anchor joins.
+	recStore record.Store
+	opLog    *record.Log
+	logID    record.Hash
+	index    map[record.Hash]uint64
+	ledger   *economy.Ledger
+	ecoStore *economy.MemStore
+	registry *dispute.Registry
+
 	// manifest maps a commons artifact id (hex) to the Locker hashes of its
 	// member-local narrative — the front-end-local index that lets a reader
 	// fetch narrative the commons deliberately does not carry.
@@ -70,7 +101,11 @@ type narrativeRefs struct {
 	Result record.Hash
 }
 
-// directory is the covenant Directory view over the server's member map.
+// directory is the covenant Directory view over the server's member map, and
+// accountDirectory the economy view over the account map — two typed views of
+// the ONE shared registry (Go method sets cannot overload PublicKey by ID
+// type). Every view returns a COPY of the registered key, so no caller can
+// corrupt the registry through a returned slice.
 type directory struct{ s *Server }
 
 func (d directory) PublicKey(m covenant.MemberID) (ed25519.PublicKey, bool) {
@@ -81,18 +116,87 @@ func (d directory) PublicKey(m covenant.MemberID) (ed25519.PublicKey, bool) {
 	return append(ed25519.PublicKey(nil), pub...), true
 }
 
-// noAnchors admits no assessments: slice 1 has no sealed-exchange ingress yet,
-// so no assessment can be recorded and every Standing is empty-but-valid. When
-// the economy/record exchange ingress lands, this is replaced by the
-// record-log-backed anchors the cmd/cloudy composition root already implements.
-type noAnchors struct{}
+type accountDirectory struct{ s *Server }
 
-func (noAnchors) Sealed(covenant.ExchangeRef, covenant.MemberID, covenant.MemberID) bool {
-	return false
+func (d accountDirectory) PublicKey(a economy.AccountID) (ed25519.PublicKey, bool) {
+	pub, ok := d.s.byAccount[a]
+	if !ok {
+		return nil, false
+	}
+	return append(ed25519.PublicKey(nil), pub...), true
 }
 
-// NewServer constructs the slice-1 composition for a platform with in-memory
-// stores.
+// recAnchors implements covenant.Anchors against the operator's Drops log:
+// resolve both MemberIDs through the shared directory, find the entry whose
+// ID() equals the ExchangeRef via the server's ID->seq index, and demand an
+// entry bound to THIS operator log that fully verifies and is sealed by
+// exactly the resolved pair, in either order. Same join as cmd/cloudy's.
+// Callers hold s.mu (the Book calls Sealed inside Record, which handlers
+// already serialize), so the anchor reads take no lock of their own.
+type recAnchors struct{ s *Server }
+
+func (a recAnchors) Sealed(exchange covenant.ExchangeRef, assessor, subject covenant.MemberID) bool {
+	assessorKey, ok := a.s.byMember[assessor]
+	if !ok {
+		return false
+	}
+	subjectKey, ok := a.s.byMember[subject]
+	if !ok {
+		return false
+	}
+	id := record.Hash(exchange)
+	seq, ok := a.s.index[id]
+	if !ok {
+		return false
+	}
+	e, err := a.s.recStore.At(seq)
+	if err != nil || e.ID() != id || e.Log != a.s.logID || !e.Verify() {
+		return false
+	}
+	return (bytes.Equal(e.Proposer, assessorKey) && bytes.Equal(e.Acceptor, subjectKey)) ||
+		(bytes.Equal(e.Proposer, subjectKey) && bytes.Equal(e.Acceptor, assessorKey))
+}
+
+// dispAnchors is the dispute-side twin: the same join on the same index, but
+// the dispute port speaks raw ed25519 keys, so the party match compares keys
+// directly. The [32]byte conversion between record.Hash and the two layers'
+// ExchangeRef types happens in these two views and nowhere else.
+type dispAnchors struct{ s *Server }
+
+func (a dispAnchors) Sealed(exchange dispute.ExchangeRef, complainant, respondent ed25519.PublicKey) bool {
+	id := record.Hash(exchange)
+	seq, ok := a.s.index[id]
+	if !ok {
+		return false
+	}
+	e, err := a.s.recStore.At(seq)
+	if err != nil || e.ID() != id || e.Log != a.s.logID || !e.Verify() {
+		return false
+	}
+	return (bytes.Equal(e.Proposer, complainant) && bytes.Equal(e.Acceptor, respondent)) ||
+		(bytes.Equal(e.Proposer, respondent) && bytes.Equal(e.Acceptor, complainant))
+}
+
+// appendEntry is the ONLY append path into the operator log: it appends and
+// records the entry's ID->seq mapping, so every assessment or dispute of that
+// exchange can anchor to it. Appending via s.opLog directly would strand the
+// entry unanchorable forever. Caller holds s.mu.
+func (s *Server) appendEntry(e record.Entry) (uint64, error) {
+	seq, err := s.opLog.Append(e)
+	if err != nil {
+		return 0, err
+	}
+	s.index[e.ID()] = seq
+	return seq, nil
+}
+
+// NewServer constructs the member-facing composition for a platform with
+// in-memory stores and ephemeral keys, exactly as honest about what it is as
+// cmd/cloudy: nothing here is a durable deployment. The steward and
+// adjudicator PRIVATE keys are discarded at construction — no PolicyChange
+// (so no escrow->credit transition) and no ruling is signable in this
+// process. Only the operator's checkpoint-signing key is held, because
+// serving signed checkpoints is the operator's own job.
 func NewServer(platform string) (*Server, error) {
 	if platform == "" {
 		return nil, errors.New("consumerapi: platform must be set")
@@ -105,19 +209,58 @@ func NewServer(platform string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{
-		platform: platform,
-		byMember: make(map[covenant.MemberID]ed25519.PublicKey),
-		tree:     tree,
-		catalog:  catalog,
-		locker:   record.NewMemLocker(),
-		manifest: make(map[string]narrativeRefs),
-	}
-	book, err := covenant.NewBook(platform, nil, directory{s}, noAnchors{}, covenant.NewMemStore())
+	operatorPub, operatorPriv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	s.book = book
+	stewardPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	adjudicatorPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{
+		platform:     platform,
+		operatorPub:  operatorPub,
+		operatorPriv: operatorPriv,
+		byMember:     make(map[covenant.MemberID]ed25519.PublicKey),
+		byAccount:    make(map[economy.AccountID]ed25519.PublicKey),
+		tree:         tree,
+		catalog:      catalog,
+		locker:       record.NewMemLocker(),
+		index:        make(map[record.Hash]uint64),
+		manifest:     make(map[string]narrativeRefs),
+	}
+	s.recStore = record.NewMemStore()
+	s.opLog, err = record.OpenLog(operatorPub, s.recStore)
+	if err != nil {
+		return nil, err
+	}
+	s.logID = record.LogID(operatorPub)
+	s.ecoStore = economy.NewMemStore()
+	s.ledger, err = economy.Open(economy.Genesis{
+		Platform:  platform,
+		Stewards:  []ed25519.PublicKey{stewardPub},
+		Threshold: 1,
+		Policy:    economy.Policy{Mode: economy.ModeEscrow},
+	}, accountDirectory{s}, s.ecoStore)
+	if err != nil {
+		return nil, err
+	}
+	s.book, err = covenant.NewBook(platform, nil, directory{s}, recAnchors{s}, covenant.NewMemStore())
+	if err != nil {
+		return nil, err
+	}
+	s.registry, err = dispute.NewRegistry(dispute.Charter{
+		Platform:     platform,
+		Adjudicators: []ed25519.PublicKey{adjudicatorPub},
+		Threshold:    1,
+	}, dispAnchors{s}, dispute.NewMemStore())
+	if err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -133,6 +276,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/market/listings", s.handleCreateListing)
 	mux.HandleFunc("GET /api/v1/market/listings", s.handleBrowseListings)
 	mux.HandleFunc("GET /api/v1/market/listings/{id}", s.handleGetListing)
+	mux.HandleFunc("GET /api/v1/drops/log", s.handleDropsLog)
+	mux.HandleFunc("GET /api/v1/drops/checkpoints", s.handleDropsCheckpoints)
+	mux.HandleFunc("POST /api/v1/drops", s.handleAppendDrop)
+	mux.HandleFunc("GET /api/v1/drops/{id}", s.handleGetDrop)
+	mux.HandleFunc("GET /api/v1/credit/policy", s.handleCreditPolicy)
+	mux.HandleFunc("GET /api/v1/credit/accounts/{id}/balance", s.handleBalance)
+	mux.HandleFunc("GET /api/v1/credit/accounts/{id}/history", s.handleHistory)
+	mux.HandleFunc("POST /api/v1/credit/spends", s.handlePostSpend)
+	mux.HandleFunc("POST /api/v1/assessments", s.handleRecordAssessment)
+	mux.HandleFunc("POST /api/v1/disputes", s.handleOpenDispute)
+	mux.HandleFunc("GET /api/v1/disputes/{id}", s.handleGetDispute)
+	mux.HandleFunc("POST /api/v1/disputes/{id}/withdraw", s.handleWithdrawDispute)
 	return mux
 }
 

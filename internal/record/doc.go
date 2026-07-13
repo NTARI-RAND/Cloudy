@@ -1,6 +1,8 @@
-// Package record is Cloudy's dialog-sealed, append-only, witnessed record:
-// the durable account of what two members agreed to, kept as per-operator
-// hash-chained logs whose integrity any member can verify offline. It is a
+// Package record is Drops — Cloudy's dialog-sealed, append-only, witnessed
+// record: the durable account of what two members agreed to, kept as
+// per-operator hash-chained logs whose integrity any member can verify
+// offline. Drops is the product name (and the domain-tag namespace, drops/*);
+// record stays the Go package name per the 2026-07-09 naming decision. It is a
 // JFA member-economy layer the substrate coordination protocol does not
 // define, and the member-facing analogue of the protocol's anchor/ package:
 // anchor/ reserves witnessing of substrate EMPLOYMENT claims; this package
@@ -117,12 +119,12 @@
 // Every hash and signature in the package is computed over canonical bytes
 // beginning with one of six distinct, unexported domain tags:
 //
-//	cloudy/record/content/v0     HashContent digests
-//	cloudy/record/entry/v0       Entry signing payloads (both seals)
-//	cloudy/record/leaf/v0        Entry.ID leaf hashes
-//	cloudy/record/chain/v0       the chain derivation: LogID seed and fold steps
-//	cloudy/record/checkpoint/v0  Checkpoint signing payloads
-//	cloudy/record/witness/v0     witness countersignature payloads
+//	drops/content/v0     HashContent digests
+//	drops/entry/v0       Entry signing payloads (both seals)
+//	drops/leaf/v0        Entry.ID leaf hashes
+//	drops/chain/v0       the chain derivation: LogID seed and fold steps
+//	drops/checkpoint/v0  Checkpoint signing payloads
+//	drops/witness/v0     witness countersignature payloads
 //
 // so no artifact is transferable between message types, between a hash role
 // and a signature role, or back into sohocloud-protocol messages. The chain

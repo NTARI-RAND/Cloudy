@@ -14,7 +14,7 @@ import (
 // single-field seed (LogID over the operator key) and the two-field fold
 // step (previous head, leaf). Canon's length prefixes keep the two shapes
 // disjoint, and neither is a signature payload.
-const domainChain = "cloudy/record/chain/v0"
+const domainChain = "drops/chain/v0"
 
 // chainStep folds one leaf hash into the running chain head.
 func chainStep(prev, leaf Hash) Hash {

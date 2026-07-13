@@ -11,7 +11,7 @@ import (
 // domainWitness tags witness countersignature payloads, distinct from the
 // checkpoint tag, so an operator signature can never pose as a witness
 // cosignature or vice versa.
-const domainWitness = "cloudy/record/witness/v0"
+const domainWitness = "drops/witness/v0"
 
 // witnessPayload is the canonical payload a witness countersigns: the
 // checkpoint's canonical bytes wrapped under the witness domain tag.

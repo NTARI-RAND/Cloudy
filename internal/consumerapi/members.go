@@ -48,8 +48,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	member := covenant.MemberIDFor(s.platform, pub)
 	account := economy.AccountIDFor(s.platform, pub)
 
+	// One key, two platform-scoped IDs, ONE owned copy in the shared registry:
+	// the covenant and economy views resolve the same registered key.
+	owned := append(ed25519.PublicKey(nil), pub...)
 	s.mu.Lock()
-	s.byMember[member] = append(ed25519.PublicKey(nil), pub...)
+	s.byMember[member] = owned
+	s.byAccount[account] = owned
 	s.mu.Unlock()
 
 	writeJSON(w, http.StatusOK, registerResponse{
