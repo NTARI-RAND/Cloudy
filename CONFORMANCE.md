@@ -37,6 +37,7 @@ Statuses are stated per the architecture's honesty rule. Built member-layer work
 - **Covenant and economy are stubs on main.** Their package docs carry the binding invariants; the built implementations are in the open, stacked PRs and must satisfy those docs to merge.
 - **Record domain-tag rename** (product naming) is pending and must land **before any durable persistence** — retagging after durable logs exist would be a rewrite.
 - **Named record residuals** (steganographic floor, timestamp covert channel, witness amnesia, liveness gap) are documented in the record package doc rather than pretended away.
+- **Contributor node — Executor seam built; runtime implementations pending.** `internal/contribute` fixes the node-contribution contract (Executor / ServiceExecutor / Registry / NodeContract) with two invariants enforced by tests: a scavenged node accepts only preemptible executors (owner-never-interrupted), and a Service workload requires pinned placement. `cmd/cloudy-agent` runs it end to end with a **real** Storage executor (opaque sealed shards + the `internal/storage` proof-of-possession) and **placeholder** Compute/Service executors. The heavy runtime port from the coordinator's transitional `internal/agent` — Docker executor, gopsutil hardware sampling, opt-out/allowlist/printers, and the agent→cloudyd→`/v0` relay — is the named next step and lands *behind* this seam without changing it.
 
 ## Dependency declaration
 
