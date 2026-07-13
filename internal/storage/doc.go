@@ -42,7 +42,7 @@
 // named follow-up), and the challenge table is a finite-budget
 // proof-of-storage (homomorphic-tag PoR is the named follow-up). The wire
 // messages that will carry challenges and lease terms are SCP v0.3 scope —
-// see Development/SCP-completion-roadmap.md.
+// see the SCP completion roadmap (sohocloud-protocol repo; NTARI-internal copy: Development/Planning/SCP-completion-roadmap.md).
 //
 // Residual leaks, named honestly: shard traffic volume per host is still
 // observable (bounded by class sizes); urgent reads that cannot wait for a
