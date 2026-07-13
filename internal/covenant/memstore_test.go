@@ -15,6 +15,7 @@ func admitted(assessor, subject MemberID, ex ExchangeRef, category string, l Lev
 		Assessor:  assessor,
 		Subject:   subject,
 		Exchange:  ex,
+		Relation:  RelationTrade,
 		Category:  category,
 		Level:     l,
 		IssuedAt:  time.Unix(1700000000, 0).UTC(),

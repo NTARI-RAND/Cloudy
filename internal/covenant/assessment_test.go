@@ -67,6 +67,7 @@ func testAssessment(assessor, subject MemberID, ex ExchangeRef, l Level) Assessm
 		Assessor: assessor,
 		Subject:  subject,
 		Exchange: ex,
+		Relation: RelationTrade,
 		Category: testCategory,
 		Level:    l,
 		IssuedAt: time.Unix(1700000000, 0).UTC(),
@@ -102,6 +103,12 @@ func (ss sealSet) seal(ex ExchangeRef, a, b MemberID) {
 func (ss sealSet) Sealed(ex ExchangeRef, assessor, subject MemberID) bool {
 	_, ok := ss[pairKey(ex, assessor, subject)]
 	return ok
+}
+
+// Adjudicated implements the adjudication-relation anchor for tests that
+// exercise trade only; relation-specific anchoring has its own fake below.
+func (ss sealSet) Adjudicated(ExchangeRef, MemberID, MemberID) bool {
+	return false
 }
 
 // --- level tests -----------------------------------------------------------
@@ -241,6 +248,7 @@ func goldenAssessment() Assessment {
 	a := Assessment{
 		Assessor: MemberID(strings.Repeat("0123456789abcdef", 4)),
 		Subject:  MemberID(strings.Repeat("fedcba9876543210", 4)),
+		Relation: RelationTrade,
 		Category: "reliability",
 		Level:    LevelBasicSatisfaction,
 		IssuedAt: time.Unix(1700000000, 123456789).UTC(),
@@ -276,13 +284,14 @@ func appendInt64(b []byte, v int64) []byte {
 
 // reconstructCanonical rebuilds an assessment's canonical bytes independently
 // of canon, in the documented field order: assessor, subject, exchange,
-// category, level (Int64), commentHash, issuedAt.
+// relation, category, level (Int64), commentHash, issuedAt.
 func reconstructCanonical(a Assessment) []byte {
 	var want []byte
-	want = appendLenPrefixed(want, []byte("cloudy/covenant/assessment/v0"))
+	want = appendLenPrefixed(want, []byte("cloudy/covenant/assessment/v1"))
 	want = appendLenPrefixed(want, []byte(a.Assessor))
 	want = appendLenPrefixed(want, []byte(a.Subject))
 	want = appendLenPrefixed(want, a.Exchange[:])
+	want = appendLenPrefixed(want, []byte(a.Relation))
 	want = appendLenPrefixed(want, []byte(a.Category))
 	want = appendInt64(want, int64(a.Level))
 	want = appendLenPrefixed(want, a.CommentHash[:])
@@ -302,10 +311,11 @@ func TestCanonicalBytesGolden(t *testing.T) {
 	// Frozen hex of the same vector: fails on ANY change to fields, order,
 	// tag, or encoding — including a change mirrored into the reconstruction.
 	const goldenHex = "" +
-		"1d636c6f7564792f636f76656e616e742f6173736573736d656e742f7630" +
+		"1d636c6f7564792f636f76656e616e742f6173736573736d656e742f7631" +
 		"4030313233343536373839616263646566303132333435363738396162636465663031323334353637383961626364656630313233343536373839616263646566" +
 		"4066656463626139383736353433323130666564636261393837363534333231306665646362613938373635343332313066656463626139383736353433323130" +
 		"200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" +
+		"057472616465" +
 		"0b72656c696162696c697479" +
 		"0000000000000002" +
 		"20c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf" +
@@ -315,7 +325,7 @@ func TestCanonicalBytesGolden(t *testing.T) {
 	}
 
 	// The bytes begin with the length-prefixed domain tag.
-	tag := "cloudy/covenant/assessment/v0"
+	tag := "cloudy/covenant/assessment/v1"
 	prefix := appendLenPrefixed(nil, []byte(tag))
 	if !bytes.HasPrefix(got, prefix) {
 		t.Errorf("canonical bytes must begin with the length-prefixed domain tag %q", tag)

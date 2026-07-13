@@ -154,6 +154,7 @@ func TestAssessmentsAnchorToSealedDialogs(t *testing.T) {
 			Assessor: covenant.MemberIDFor(platform, pubA),
 			Subject:  covenant.MemberIDFor(platform, pubB),
 			Exchange: ex,
+			Relation: covenant.RelationTrade,
 			Category: "reliability",
 			Level:    covenant.Level(level),
 			IssuedAt: time.Now().UTC(),
@@ -167,6 +168,7 @@ func TestAssessmentsAnchorToSealedDialogs(t *testing.T) {
 			Assessor:    string(a.Assessor),
 			Subject:     string(a.Subject),
 			Exchange:    exchangeHex,
+			Relation:    string(a.Relation),
 			Category:    a.Category,
 			Level:       level,
 			CommentHash: commentHash,
@@ -196,17 +198,26 @@ func TestAssessmentsAnchorToSealedDialogs(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("standing: code %d", rec.Code)
 	}
-	overall := body["overall"].(map[string]any)
+	relations := body["relations"].(map[string]any)
+	trade := relations["trade"].(map[string]any)
+	overall := trade["overall"].(map[string]any)
 	if overall["total"].(float64) != 1 {
-		t.Fatalf("standing total = %v, want 1", overall["total"])
+		t.Fatalf("trade standing total = %v, want 1", overall["total"])
 	}
 	counts := overall["counts"].(map[string]any)
 	if counts[covenant.Level(3).String()].(float64) != 1 {
 		t.Fatalf("standing counts = %v, want one at %q", counts, covenant.Level(3).String())
 	}
+	// The response is typed by relation and carries NO cross-relation pool
+	// and no scalar summary anywhere.
+	for _, rel := range []string{"trade", "adjudication-conduct", "verdict-satisfaction"} {
+		if _, ok := relations[rel]; !ok {
+			t.Fatalf("standing response missing relation %q", rel)
+		}
+	}
 	for k := range body {
-		if k == "average" || k == "score" || k == "rating" {
-			t.Fatalf("standing response leaked a scalar %q — the covenant forbids the average", k)
+		if k == "overall" || k == "average" || k == "score" || k == "rating" {
+			t.Fatalf("standing response leaked a cross-relation or scalar field %q", k)
 		}
 	}
 }
@@ -453,5 +464,164 @@ func TestDropProofVerifiesOffline(t *testing.T) {
 	bad.Content[0] ^= 1
 	if record.VerifyInclusion(bad, p, cp, ed25519.PublicKey(opKeyRaw)) {
 		t.Fatal("a tampered entry must not verify")
+	}
+}
+
+// TestConductRatingAndAdjudicatorAnswer drives the symmetry loop end to end
+// over the API: a member with a real filed claim rates the operator's
+// adjudication conduct No Trust; the operator — a member of its own platform
+// — answers. The rating stays visible in its own typed stream; the answer
+// annotates without erasing anything.
+func TestConductRatingAndAdjudicatorAnswer(t *testing.T) {
+	s, err := NewServer(platform)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.Handler()
+	pubA, privA := key(1)
+	pubB, privB := key(2)
+	registerMember(t, h, pubA, privA)
+	registerMember(t, h, pubB, privB)
+	id := sealExchange(t, h, pubA, privA, pubB, privB)
+
+	// File a real claim (the adjudication-relation anchor).
+	exRaw, _ := hex.DecodeString(id)
+	var ex dispute.ExchangeRef
+	copy(ex[:], exRaw)
+	reason := sha256.Sum256([]byte("grievance"))
+	o, err := dispute.NewOpening(platform, pubA, pubB, ex, reason, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Sign(privA); err != nil {
+		t.Fatal(err)
+	}
+	oid := o.ID()
+	typeHash := sha256.Sum256([]byte("trade-harm"))
+	commitment := record.FilingCommitment{
+		Claim:    record.Hash(oid),
+		Exchange: record.Hash(ex),
+		TypeHash: record.Hash(typeHash),
+		At:       o.OpenedAt,
+		Filer:    pubA,
+	}
+	commitment.Sign(privA)
+	req := openDisputeRequest{
+		Complainant: hex.EncodeToString(pubA),
+		Respondent:  hex.EncodeToString(pubB),
+		Exchange:    id,
+		ReasonHash:  hex.EncodeToString(o.ReasonHash[:]),
+		Nonce:       hex.EncodeToString(o.Nonce[:]),
+		OpenedAt:    o.OpenedAt.Format(time.RFC3339Nano),
+		Signature:   hex.EncodeToString(o.Signature),
+	}
+	req.Filing.TypeHash = hex.EncodeToString(typeHash[:])
+	req.Filing.At = o.OpenedAt.Format(time.RFC3339Nano)
+	req.Filing.Signature = hex.EncodeToString(commitment.Signature)
+	rec, _ := do(t, h, "POST", "/api/v1/disputes", req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("open dispute: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The complainant rates the OPERATOR's conduct: No Trust, with the
+	// mandatory comment digest. The operator's member id is the subject.
+	operatorMember := s.operatorMember
+	commentDigest := sha256.Sum256([]byte("sat on my claim"))
+	a := covenant.Assessment{
+		Assessor:    covenant.MemberIDFor(platform, pubA),
+		Subject:     operatorMember,
+		Exchange:    covenant.ExchangeRef(record.Hash(ex)),
+		Relation:    covenant.RelationAdjudicationConduct,
+		Category:    "support",
+		Level:       covenant.LevelNoTrust,
+		CommentHash: commentDigest,
+		IssuedAt:    time.Now().UTC(),
+	}
+	a.Sign(privA)
+	rec, body := do(t, h, "POST", "/api/v1/assessments", assessmentRequest{
+		Assessor:    string(a.Assessor),
+		Subject:     string(a.Subject),
+		Exchange:    id,
+		Relation:    string(a.Relation),
+		Category:    a.Category,
+		Level:       int8(a.Level),
+		CommentHash: hex.EncodeToString(commentDigest[:]),
+		IssuedAt:    a.IssuedAt.Format(time.RFC3339Nano),
+		Signature:   hex.EncodeToString(a.Signature),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("conduct assessment: %d %s", rec.Code, rec.Body.String())
+	}
+	assessmentID := body["id"].(string)
+
+	// A member with NO claim on the exchange cannot rate conduct (Sybil
+	// posture: the governance-relevant stream is not inflatable). The
+	// respondent could — they are a genuine party — so the negative case is
+	// a THIRD member who never touched the claim.
+	pubC, privC := key(3)
+	registerMember(t, h, pubC, privC)
+	b := covenant.Assessment{
+		Assessor: covenant.MemberIDFor(platform, pubC),
+		Subject:  operatorMember,
+		Exchange: covenant.ExchangeRef(record.Hash(ex)),
+		Relation: covenant.RelationAdjudicationConduct,
+		Category: "support",
+		Level:    covenant.LevelBasicPromise,
+		IssuedAt: time.Now().UTC(),
+	}
+	b.Sign(privC)
+	rec, _ = do(t, h, "POST", "/api/v1/assessments", assessmentRequest{
+		Assessor:  string(b.Assessor),
+		Subject:   string(b.Subject),
+		Exchange:  id,
+		Relation:  string(b.Relation),
+		Category:  b.Category,
+		Level:     int8(b.Level),
+		IssuedAt:  b.IssuedAt.Format(time.RFC3339Nano),
+		Signature: hex.EncodeToString(b.Signature),
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("a stranger's conduct rating must be refused (got %d) — this stream is Sybil food otherwise", rec.Code)
+	}
+
+	// The operator answers through the same public surface — the recourse
+	// the architecture demanded. It signs with its own key client-side; the
+	// test reaches into the server only for the key, exactly like a real
+	// operator would hold its own.
+	answerDigest := sha256.Sum256([]byte("adjudication timeline, member-local"))
+	an := covenant.Answer{
+		Answerer:   operatorMember,
+		AnswerHash: answerDigest,
+		IssuedAt:   time.Now().UTC(),
+	}
+	idRaw, _ := hex.DecodeString(assessmentID)
+	copy(an.Assessment[:], idRaw)
+	an.Sign(s.operatorPriv)
+	rec, _ = do(t, h, "POST", "/api/v1/assessments/"+assessmentID+"/answers", answerRequest{
+		Answerer:   string(operatorMember),
+		AnswerHash: hex.EncodeToString(answerDigest[:]),
+		IssuedAt:   an.IssuedAt.Format(time.RFC3339Nano),
+		Signature:  hex.EncodeToString(an.Signature),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("adjudicator answer: %d %s", rec.Code, rec.Body.String())
+	}
+	rec, body = do(t, h, "GET", "/api/v1/assessments/"+assessmentID+"/answer", nil)
+	if rec.Code != http.StatusOK || body["answerer"] != string(operatorMember) {
+		t.Fatalf("read answer: %d %v", rec.Code, body)
+	}
+
+	// The harm stays visible in its own typed stream beside the answer.
+	rec, body = do(t, h, "GET", "/api/v1/members/"+string(operatorMember)+"/standing", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("standing: %d", rec.Code)
+	}
+	conduct := body["relations"].(map[string]any)["adjudication-conduct"].(map[string]any)
+	if conduct["harm"].(float64) != 1 {
+		t.Fatal("the conduct harm must stay visible; an answer annotates, never erases")
+	}
+	trade := body["relations"].(map[string]any)["trade"].(map[string]any)
+	if trade["harm"].(float64) != 0 {
+		t.Fatal("the conduct harm must not leak into the trade stream")
 	}
 }

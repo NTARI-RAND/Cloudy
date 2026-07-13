@@ -31,6 +31,18 @@ func (c *countingStore) BySubject(m MemberID) ([]Admitted, error) {
 	return c.inner.BySubject(m)
 }
 
+func (c *countingStore) ByID(id [32]byte) (Admitted, bool, error) {
+	return c.inner.ByID(id)
+}
+
+func (c *countingStore) AppendAnswer(aa AdmittedAnswer) error {
+	return c.inner.AppendAnswer(aa)
+}
+
+func (c *countingStore) AnswerFor(id [32]byte) (AdmittedAnswer, bool, error) {
+	return c.inner.AnswerFor(id)
+}
+
 // testBook wires a Book over the given members' keys with the given seals,
 // using the LBTAS default category vocabulary.
 func testBook(t *testing.T, dir dirMap, seals sealSet, store Store) *Book {
@@ -118,7 +130,7 @@ func TestRecordRejectsInvalid(t *testing.T) {
 		{"unknown category", signed(withCategory(testAssessment(alice, bob, ref(0xAA), LevelBasicPromise), "warmth"), alicePriv)},
 		{"empty category", signed(withCategory(testAssessment(alice, bob, ref(0xAA), LevelBasicPromise), ""), alicePriv)},
 		{"no-trust without comment hash", signed(withoutCommentHash(testAssessment(alice, bob, ref(0xAA), LevelNoTrust)), alicePriv)},
-		{"zero IssuedAt", signed(Assessment{Assessor: alice, Subject: bob, Exchange: ref(0xAA), Category: testCategory, Level: LevelBasicPromise}, alicePriv)},
+		{"zero IssuedAt", signed(Assessment{Assessor: alice, Subject: bob, Exchange: ref(0xAA), Relation: RelationTrade, Category: testCategory, Level: LevelBasicPromise}, alicePriv)},
 		{"unknown assessor key", signed(testAssessment(charlie, bob, ref(0xCC), LevelBasicPromise), charliePriv)},
 		{"unsigned", testAssessment(alice, bob, ref(0xAA), LevelBasicPromise)},
 		{"signed then tampered", func() Assessment {
@@ -193,11 +205,11 @@ func TestRecordNoTrustCommentHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Standing = %v", err)
 	}
-	if s.Harm() != 1 {
-		t.Errorf("Harm() = %d, want 1 — the admitted -1 must be surfaced", s.Harm())
+	if s.Relation(RelationTrade).Harm() != 1 {
+		t.Errorf("Harm() = %d, want 1 — the admitted -1 must be surfaced", s.Relation(RelationTrade).Harm())
 	}
-	if s.Total() != 2 {
-		t.Errorf("Total() = %d, want 2", s.Total())
+	if s.Relation(RelationTrade).Total() != 2 {
+		t.Errorf("Total() = %d, want 2", s.Relation(RelationTrade).Total())
 	}
 }
 
@@ -456,18 +468,18 @@ func TestRecordDuplicate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Standing = %v", err)
 	}
-	if s.Total() != 3 {
-		t.Errorf("Standing(bob).Total() = %d, want 3", s.Total())
+	if s.Relation(RelationTrade).Total() != 3 {
+		t.Errorf("Standing(bob).Total() = %d, want 3", s.Relation(RelationTrade).Total())
 	}
-	if got := s.Category(testCategory).Total(); got != 2 {
+	if got := s.Relation(RelationTrade).Category(testCategory).Total(); got != 2 {
 		t.Errorf("Category(%q).Total() = %d, want 2", testCategory, got)
 	}
-	if got := s.Category("support").Total(); got != 1 {
+	if got := s.Relation(RelationTrade).Category("support").Total(); got != 1 {
 		t.Errorf("Category(\"support\").Total() = %d, want 1", got)
 	}
-	if s.Overall().Count(LevelBasicPromise) != 1 || s.Overall().Count(LevelBasicSatisfaction) != 2 {
+	if s.Relation(RelationTrade).Overall().Count(LevelBasicPromise) != 1 || s.Relation(RelationTrade).Overall().Count(LevelBasicSatisfaction) != 2 {
 		t.Errorf("Overall() counts = basic-promise %d, basic-satisfaction %d; want 1, 2",
-			s.Overall().Count(LevelBasicPromise), s.Overall().Count(LevelBasicSatisfaction))
+			s.Relation(RelationTrade).Overall().Count(LevelBasicPromise), s.Relation(RelationTrade).Overall().Count(LevelBasicSatisfaction))
 	}
 }
 
@@ -510,6 +522,7 @@ func standingFixture(t *testing.T) (*Book, Store, MemberID, MemberID) {
 			Assessor: assessor,
 			Subject:  v.subject,
 			Exchange: ex,
+			Relation: RelationTrade,
 			Category: v.category,
 			Level:    v.level,
 			IssuedAt: time.Unix(1700000000+int64(i), 0).UTC(),
@@ -553,27 +566,27 @@ func TestStandingShape(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Standing(%s) = %v", sub.name, err)
 		}
-		if s.Total() != 4 {
-			t.Errorf("Standing(%s).Total() = %d, want 4", sub.name, s.Total())
+		if s.Relation(RelationTrade).Total() != 4 {
+			t.Errorf("Standing(%s).Total() = %d, want 4", sub.name, s.Relation(RelationTrade).Total())
 		}
 		for _, l := range Levels() {
-			if got := s.Overall().Count(l); got != sub.want[l] {
+			if got := s.Relation(RelationTrade).Overall().Count(l); got != sub.want[l] {
 				t.Errorf("Standing(%s).Overall().Count(%s) = %d, want %d", sub.name, l, got, sub.want[l])
 			}
 		}
 		for cat, lvl := range sub.byCat {
-			d := s.Category(cat)
+			d := s.Relation(RelationTrade).Category(cat)
 			if d.Total() != 1 || d.Count(lvl) != 1 {
 				t.Errorf("Standing(%s).Category(%q) = total %d, %s %d; want 1, 1", sub.name, cat, d.Total(), lvl, d.Count(lvl))
 			}
 		}
-		if got := s.Harm(); got != sub.harm {
+		if got := s.Relation(RelationTrade).Harm(); got != sub.harm {
 			t.Errorf("Standing(%s).Harm() = %d, want %d — Harm counts every No Trust verdict across all categories", sub.name, got, sub.harm)
 		}
-		if s.Overall().Count(Level(99)) != 0 {
+		if s.Relation(RelationTrade).Overall().Count(Level(99)) != 0 {
 			t.Errorf("Count of an unknown level must be 0")
 		}
-		if d := s.Category("no-such-category"); d.Total() != 0 {
+		if d := s.Relation(RelationTrade).Category("no-such-category"); d.Total() != 0 {
 			t.Errorf("Category of an unknown name must be empty, got total %d", d.Total())
 		}
 	}
@@ -585,7 +598,7 @@ func TestStandingShape(t *testing.T) {
 	dv, _ := b.Standing(volatile)
 	same := true
 	for _, l := range Levels() {
-		if ds.Overall().Count(l) != dv.Overall().Count(l) {
+		if ds.Relation(RelationTrade).Overall().Count(l) != dv.Relation(RelationTrade).Overall().Count(l) {
 			same = false
 		}
 	}
@@ -609,23 +622,23 @@ func TestStandingCategoryOverallConsistency(t *testing.T) {
 		for _, l := range Levels() {
 			pooled := 0
 			for _, cat := range categories {
-				pooled += s.Category(cat).Count(l)
+				pooled += s.Relation(RelationTrade).Category(cat).Count(l)
 			}
-			if got := s.Overall().Count(l); got != pooled {
+			if got := s.Relation(RelationTrade).Overall().Count(l); got != pooled {
 				t.Errorf("Overall().Count(%s) = %d, want %d — the per-category counts pooled", l, got, pooled)
 			}
 		}
 		pooledTotal := 0
 		for _, cat := range categories {
-			pooledTotal += s.Category(cat).Total()
+			pooledTotal += s.Relation(RelationTrade).Category(cat).Total()
 		}
-		if s.Overall().Total() != pooledTotal || s.Total() != pooledTotal {
+		if s.Relation(RelationTrade).Overall().Total() != pooledTotal || s.Relation(RelationTrade).Total() != pooledTotal {
 			t.Errorf("Total() = %d, Overall().Total() = %d, want the pooled per-category total %d",
-				s.Total(), s.Overall().Total(), pooledTotal)
+				s.Relation(RelationTrade).Total(), s.Relation(RelationTrade).Overall().Total(), pooledTotal)
 		}
-		if s.Harm() != s.Overall().Count(LevelNoTrust) {
+		if s.Relation(RelationTrade).Harm() != s.Relation(RelationTrade).Overall().Count(LevelNoTrust) {
 			t.Errorf("Harm() = %d, want Overall().Count(LevelNoTrust) = %d — Harm is the -1 count, nothing else",
-				s.Harm(), s.Overall().Count(LevelNoTrust))
+				s.Relation(RelationTrade).Harm(), s.Relation(RelationTrade).Overall().Count(LevelNoTrust))
 		}
 	}
 }
@@ -652,15 +665,15 @@ func TestStandingLossless(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Standing = %v", err)
 	}
-	if s.Total() != len(ads) {
-		t.Errorf("Total() = %d, want the store multiset size %d", s.Total(), len(ads))
+	if s.Relation(RelationTrade).Total() != len(ads) {
+		t.Errorf("Total() = %d, want the store multiset size %d", s.Relation(RelationTrade).Total(), len(ads))
 	}
 	for _, l := range Levels() {
-		if s.Overall().Count(l) != recount[l] {
-			t.Errorf("Overall().Count(%s) = %d, want %d from the store multiset — the Distribution must be the full distribution, not a summary", l, s.Overall().Count(l), recount[l])
+		if s.Relation(RelationTrade).Overall().Count(l) != recount[l] {
+			t.Errorf("Overall().Count(%s) = %d, want %d from the store multiset — the Distribution must be the full distribution, not a summary", l, s.Relation(RelationTrade).Overall().Count(l), recount[l])
 		}
 		for cat, want := range recountByCat {
-			if got := s.Category(cat).Count(l); got != want[l] {
+			if got := s.Relation(RelationTrade).Category(cat).Count(l); got != want[l] {
 				t.Errorf("Category(%q).Count(%s) = %d, want %d from the store multiset", cat, l, got, want[l])
 			}
 		}
@@ -675,19 +688,19 @@ func TestStandingUnknownMember(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Standing of a never-assessed member = %v, want nil error", err)
 	}
-	if s.Total() != 0 {
-		t.Errorf("Total() = %d, want 0", s.Total())
+	if s.Relation(RelationTrade).Total() != 0 {
+		t.Errorf("Total() = %d, want 0", s.Relation(RelationTrade).Total())
 	}
-	if s.Harm() != 0 {
-		t.Errorf("Harm() = %d, want 0", s.Harm())
+	if s.Relation(RelationTrade).Harm() != 0 {
+		t.Errorf("Harm() = %d, want 0", s.Relation(RelationTrade).Harm())
 	}
 	for _, l := range Levels() {
-		if s.Overall().Count(l) != 0 {
-			t.Errorf("Overall().Count(%s) = %d, want 0", l, s.Overall().Count(l))
+		if s.Relation(RelationTrade).Overall().Count(l) != 0 {
+			t.Errorf("Overall().Count(%s) = %d, want 0", l, s.Relation(RelationTrade).Overall().Count(l))
 		}
 	}
 	for _, cat := range []string{"reliability", "usability", "performance", "support"} {
-		if d := s.Category(cat); d.Total() != 0 {
+		if d := s.Relation(RelationTrade).Category(cat); d.Total() != 0 {
 			t.Errorf("Category(%q).Total() = %d, want 0", cat, d.Total())
 		}
 	}
@@ -699,6 +712,14 @@ func TestStandingUnknownMember(t *testing.T) {
 // dependency Standing must not extend trust to.
 type hostileStore struct {
 	replay []Admitted
+}
+
+// *hostileStore implements the answer/ID half of Store trivially: these fakes exist to
+// probe assessment-path behavior only.
+func (h *hostileStore) ByID([32]byte) (Admitted, bool, error) { return Admitted{}, false, nil }
+func (h *hostileStore) AppendAnswer(AdmittedAnswer) error     { return nil }
+func (h *hostileStore) AnswerFor([32]byte) (AdmittedAnswer, bool, error) {
+	return AdmittedAnswer{}, false, nil
 }
 
 func (h *hostileStore) Append(ad Admitted) error {
@@ -752,10 +773,10 @@ func TestStandingDoesNotTrustTheStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Standing(bob) = %v", err)
 	}
-	if s.Total() != 1 || s.Overall().Count(LevelDelight) != 1 {
-		t.Errorf("Standing(bob) over a replaying store = total %d, delight %d; want 1, 1 — a store replay must not inflate standing", s.Total(), s.Overall().Count(LevelDelight))
+	if s.Relation(RelationTrade).Total() != 1 || s.Relation(RelationTrade).Overall().Count(LevelDelight) != 1 {
+		t.Errorf("Standing(bob) over a replaying store = total %d, delight %d; want 1, 1 — a store replay must not inflate standing", s.Relation(RelationTrade).Total(), s.Relation(RelationTrade).Overall().Count(LevelDelight))
 	}
-	if got := s.Category(testCategory).Count(LevelDelight); got != 1 {
+	if got := s.Relation(RelationTrade).Category(testCategory).Count(LevelDelight); got != 1 {
 		t.Errorf("Category(%q).Count(Delight) = %d, want 1", testCategory, got)
 	}
 }
@@ -766,6 +787,14 @@ func TestStandingDoesNotTrustTheStore(t *testing.T) {
 // of the Store's.
 type replayStore struct {
 	ads []Admitted
+}
+
+// *replayStore implements the answer/ID half of Store trivially: these fakes exist to
+// probe assessment-path behavior only.
+func (r *replayStore) ByID([32]byte) (Admitted, bool, error) { return Admitted{}, false, nil }
+func (r *replayStore) AppendAnswer(AdmittedAnswer) error     { return nil }
+func (r *replayStore) AnswerFor([32]byte) (AdmittedAnswer, bool, error) {
+	return AdmittedAnswer{}, false, nil
 }
 
 func (r *replayStore) Append(ad Admitted) error {
@@ -805,13 +834,13 @@ func TestStandingDedupIsPerCategory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Standing = %v", err)
 	}
-	if s.Total() != 2 {
-		t.Errorf("Total() = %d, want 2 — one per (assessor, exchange, category) triple", s.Total())
+	if s.Relation(RelationTrade).Total() != 2 {
+		t.Errorf("Total() = %d, want 2 — one per (assessor, exchange, category) triple", s.Relation(RelationTrade).Total())
 	}
-	if got := s.Category("reliability").Total(); got != 1 {
+	if got := s.Relation(RelationTrade).Category("reliability").Total(); got != 1 {
 		t.Errorf("Category(reliability).Total() = %d, want 1 — the same-triple replay must be counted once", got)
 	}
-	if got := s.Category("support").Total(); got != 1 {
+	if got := s.Relation(RelationTrade).Category("support").Total(); got != 1 {
 		t.Errorf("Category(support).Total() = %d, want 1 — a second category is a distinct verdict slot", got)
 	}
 }
@@ -822,12 +851,12 @@ func TestStandingNotSerializable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Standing = %v", err)
 	}
-	if s.Total() == 0 {
+	if s.Relation(RelationTrade).Total() == 0 {
 		t.Fatal("fixture must yield a populated Standing")
 	}
 	for name, v := range map[string]interface{}{
 		"Standing":     s,
-		"Distribution": s.Overall(),
+		"Distribution": s.Relation(RelationTrade).Overall(),
 	} {
 		out, err := json.Marshal(v)
 		if err != nil {
@@ -910,6 +939,14 @@ func TestNoCollapseFunctionTripwire(t *testing.T) {
 // Store is trusted with anything.
 type hostileZeroStore struct{ queried int }
 
+// *hostileZeroStore implements the answer/ID half of Store trivially: these fakes exist to
+// probe assessment-path behavior only.
+func (h *hostileZeroStore) ByID([32]byte) (Admitted, bool, error) { return Admitted{}, false, nil }
+func (h *hostileZeroStore) AppendAnswer(AdmittedAnswer) error     { return nil }
+func (h *hostileZeroStore) AnswerFor([32]byte) (AdmittedAnswer, bool, error) {
+	return AdmittedAnswer{}, false, nil
+}
+
 func (h *hostileZeroStore) Append(Admitted) error { return nil }
 func (h *hostileZeroStore) BySubject(MemberID) ([]Admitted, error) {
 	h.queried++
@@ -930,8 +967,8 @@ func TestStandingRejectsUnmintedSubject(t *testing.T) {
 		if !errors.Is(err, ErrInvalid) {
 			t.Errorf("Standing(%q) error = %v, want ErrInvalid", subject, err)
 		}
-		if s.Total() != 0 {
-			t.Errorf("Standing(%q) counted %d phantom entries, want 0", subject, s.Total())
+		if s.Relation(RelationTrade).Total() != 0 {
+			t.Errorf("Standing(%q) counted %d phantom entries, want 0", subject, s.Relation(RelationTrade).Total())
 		}
 	}
 	if hostile.queried != 0 {

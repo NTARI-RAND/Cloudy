@@ -15,7 +15,15 @@ import (
 // tag per message, per canon's domain-separation rule: a covenant signature
 // is not transferable to any other message type or platform tag. v0 is
 // unstable — the byte layout may change without compatibility guarantees.
-const domainAssessment = "cloudy/covenant/assessment/v0"
+const domainAssessment = "cloudy/covenant/assessment/v1"
+
+// domainAssessmentID tags the derivation of an assessment's identity — the
+// hash other artifacts (answers) reference. Distinct from the signing tag:
+// an ID is a hash role, never a signature role.
+const domainAssessmentID = "cloudy/covenant/assessment-id/v1"
+
+// domainAnswer tags the canonical signing payload of an Answer.
+const domainAnswer = "cloudy/covenant/answer/v1"
 
 // domainMember tags the hash derivation of a MemberID from a platform name
 // and a member public key. Distinct from the assessment tag — a tag is never
@@ -130,15 +138,56 @@ func validLevel(l Level) bool {
 	return false
 }
 
+// Relation types a verdict by the relationship it rates. Trade,
+// adjudication-conduct, and verdict-satisfaction are different relations
+// with different base rates; the record MUST distinguish them, and no reader
+// may collapse them into one figure — that is the average the covenant
+// forbids, committed across relations instead of across ratings
+// (architecture, Record invariants). The vocabulary is closed: a relation
+// outside these three is rejected at Record.
+type Relation string
+
+const (
+	// RelationTrade rates a counterparty's honoring of a sealed exchange —
+	// the covenant's original and highest-volume relation.
+	RelationTrade Relation = "trade"
+	// RelationAdjudicationConduct rates how the adjudicating operator DID
+	// ITS JOB on a claim the assessor was party to — responsiveness,
+	// process, dwell. This is the governance-relevant stream: it is where
+	// an operator can abuse the very users it also gates.
+	RelationAdjudicationConduct Relation = "adjudication-conduct"
+	// RelationVerdictSatisfaction rates a party's satisfaction with a
+	// judgment. Unsuppressable, and therefore honest — but a No Trust here
+	// is a losing party's displeasure, NOT operator misconduct; readers
+	// must never conflate this stream with adjudication-conduct.
+	RelationVerdictSatisfaction Relation = "verdict-satisfaction"
+)
+
+// validRelation reports whether r is one of the three covenant relations.
+func validRelation(r Relation) bool {
+	switch r {
+	case RelationTrade, RelationAdjudicationConduct, RelationVerdictSatisfaction:
+		return true
+	}
+	return false
+}
+
+// Relations returns the three relations in a stable display order.
+func Relations() [3]Relation {
+	return [3]Relation{RelationTrade, RelationAdjudicationConduct, RelationVerdictSatisfaction}
+}
+
 // Assessment is one member's signed verdict on one sealed exchange it took
-// part in, under one category of the Book's closed vocabulary. Its field set
-// is closed — no free text, no note, no metadata map — so no PII or narrative
-// conduit exists in the covenant record: Category is validated against a
-// closed set at Record, and CommentHash is 32 opaque bytes, never text.
+// part in, under one category of the Book's closed vocabulary and one of the
+// three typed relations. Its field set is closed — no free text, no note, no
+// metadata map — so no PII or narrative conduit exists in the covenant
+// record: Category and Relation are validated against closed sets at Record,
+// and CommentHash is 32 opaque bytes, never text.
 type Assessment struct {
 	Assessor    MemberID    // who renders the verdict; must differ from Subject
 	Subject     MemberID    // whose standing it shapes
 	Exchange    ExchangeRef // sealed record entry this verdict is grounded in; zero is invalid
+	Relation    Relation    // trade | adjudication-conduct | verdict-satisfaction; typed, never collapsed
 	Category    string      // one of the Book's closed category vocabulary; free text is rejected
 	Level       Level       // one of the six LBTAS levels
 	CommentHash [32]byte    // SHA-256 of the justifying comment; MUST be non-zero when Level is LevelNoTrust, MAY be zero otherwise
@@ -147,21 +196,34 @@ type Assessment struct {
 }
 
 // CanonicalBytes returns the deterministic signing payload (canon encoder,
-// domain tag "cloudy/covenant/assessment/v0") with Signature excluded; it is
+// domain tag "cloudy/covenant/assessment/v1") with Signature excluded; it is
 // a signing payload only, never an export or interchange format. Field order
-// is fixed and documented: assessor, subject, exchange, category, level
-// (fixed 8-byte big-endian two's-complement Int64 of the LBTAS numeric
-// value), commentHash, issuedAt.
+// is fixed and documented: assessor, subject, exchange, relation, category,
+// level (fixed 8-byte big-endian two's-complement Int64 of the LBTAS numeric
+// value), commentHash, issuedAt. v1 adds relation inside the signed bytes —
+// an assessor's signature binds the relation it rated, so a trade verdict
+// can never be replayed as a conduct verdict.
 func (a Assessment) CanonicalBytes() []byte {
 	b := canon.New(domainAssessment)
 	b.String(string(a.Assessor))
 	b.String(string(a.Subject))
 	b.Bytes(a.Exchange[:])
+	b.String(string(a.Relation))
 	b.String(a.Category)
 	b.Int64(int64(a.Level))
 	b.Bytes(a.CommentHash[:])
 	b.Time(a.IssuedAt)
 	return b.Sum()
+}
+
+// ID returns the assessment's identity: the SHA-256, under its own domain
+// tag, of the canonical bytes plus the signature — the value an Answer
+// references. Signature-inclusive, so an unsigned draft has no citable ID.
+func (a Assessment) ID() [32]byte {
+	b := canon.New(domainAssessmentID)
+	b.Bytes(a.CanonicalBytes())
+	b.Bytes(a.Signature)
+	return sha256.Sum256(b.Sum())
 }
 
 // Sign sets Signature using the assessor's private key.
@@ -191,3 +253,44 @@ var ErrInvalid = errors.New("covenant: invalid assessment")
 // exchange under the same category; one exchange grounds at most one verdict
 // per (assessor, category), forever.
 var ErrDuplicate = errors.New("covenant: assessor already assessed this exchange under this category")
+
+// Answer is the rated party's signed response to an assessment about them —
+// the mechanism that keeps the covenant symmetric: every claim is
+// answerable, an answer is an annotation that never erases or edits the
+// assessment it answers, and the one place the architecture named the
+// symmetry broken (an adjudicator rated without recourse) is closed by this
+// artifact existing for every relation, adjudication-conduct included. Like
+// the assessment, its field set is closed: the response text lives in
+// erasable member-local storage; the commons carries only its digest.
+type Answer struct {
+	Assessment [32]byte  // Assessment.ID() of the verdict being answered
+	Answerer   MemberID  // must be the assessment's Subject — only the rated party answers
+	AnswerHash [32]byte  // SHA-256 of the member-local response text; non-zero
+	IssuedAt   time.Time // UTC
+	Signature  []byte    // ed25519 by the Answerer; excluded from CanonicalBytes
+}
+
+// CanonicalBytes returns the deterministic signing payload for the answer.
+func (an Answer) CanonicalBytes() []byte {
+	b := canon.New(domainAnswer)
+	b.Bytes(an.Assessment[:])
+	b.String(string(an.Answerer))
+	b.Bytes(an.AnswerHash[:])
+	b.Time(an.IssuedAt)
+	return b.Sum()
+}
+
+// Sign sets Signature using the answerer's private key.
+func (an *Answer) Sign(priv ed25519.PrivateKey) {
+	an.Signature = ed25519.Sign(priv, an.CanonicalBytes())
+}
+
+// Verify reports whether Signature is a valid answerer signature.
+func (an Answer) Verify(pub ed25519.PublicKey) bool {
+	return len(an.Signature) == ed25519.SignatureSize &&
+		ed25519.Verify(pub, an.CanonicalBytes(), an.Signature)
+}
+
+// ErrUnknownAssessment is returned when an answer references no admitted
+// assessment in this Book's store.
+var ErrUnknownAssessment = errors.New("covenant: answer references no admitted assessment")

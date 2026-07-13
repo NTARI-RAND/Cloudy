@@ -100,6 +100,14 @@ type Server struct {
 	lifeID    record.Hash
 	intake    *record.FilingIntake
 
+	// operatorMember is the operator's own MemberID: the operator registers
+	// in its own directory at construction (single participant identity —
+	// the adjudicating operator is a member like any other, answerable
+	// through the same covenant). disputesByExchange indexes claims by the
+	// exchange they dispute, for the adjudication-relation anchor.
+	operatorMember     covenant.MemberID
+	disputesByExchange map[record.Hash][]dispute.DisputeID
+
 	// manifest maps a commons artifact id (hex) to the Locker hashes of its
 	// member-local narrative — the front-end-local index that lets a reader
 	// fetch narrative the commons deliberately does not carry.
@@ -166,6 +174,33 @@ func (a recAnchors) Sealed(exchange covenant.ExchangeRef, assessor, subject cove
 	}
 	return (bytes.Equal(e.Proposer, assessorKey) && bytes.Equal(e.Acceptor, subjectKey)) ||
 		(bytes.Equal(e.Proposer, subjectKey) && bytes.Equal(e.Acceptor, assessorKey))
+}
+
+// Adjudicated implements the adjudication-relation anchor: the assessor was
+// a genuine party (complainant or respondent) to a claim on this exchange,
+// and the subject is the adjudicating operator's own MemberID. Callers hold
+// s.mu. Sybil posture: adjudication-conduct and verdict-satisfaction
+// standing can only accumulate from members with real, anchored claims —
+// there is nothing here for a bot swarm to inflate.
+func (a recAnchors) Adjudicated(exchange covenant.ExchangeRef, assessor, subject covenant.MemberID) bool {
+	if subject != a.s.operatorMember {
+		return false
+	}
+	assessorKey, ok := a.s.byMember[assessor]
+	if !ok {
+		return false
+	}
+	ids := a.s.disputesByExchange[record.Hash(exchange)]
+	for _, id := range ids {
+		c, err := a.s.registry.Case(id)
+		if err != nil {
+			continue
+		}
+		if bytes.Equal(c.Complainant(), assessorKey) || bytes.Equal(c.Respondent(), assessorKey) {
+			return true
+		}
+	}
+	return false
 }
 
 // dispAnchors is the dispute-side twin: the same join on the same index, but
@@ -279,6 +314,15 @@ func NewServer(platform string) (*Server, error) {
 	}
 	s.lifeID = record.LifecycleLogID(operatorPub)
 	s.intake = record.NewFilingIntake(operatorPriv)
+	// The operator registers as a member of its own platform: one identity,
+	// contributor and consumer and (here) adjudicator at once — and thereby
+	// RATEABLE: adjudication-conduct and verdict-satisfaction assessments
+	// name this MemberID as their subject, and it can answer them.
+	s.operatorMember = covenant.MemberIDFor(platform, operatorPub)
+	owned := append(ed25519.PublicKey(nil), operatorPub...)
+	s.byMember[s.operatorMember] = owned
+	s.byAccount[economy.AccountIDFor(platform, operatorPub)] = owned
+	s.disputesByExchange = make(map[record.Hash][]dispute.DisputeID)
 	return s, nil
 }
 
@@ -303,6 +347,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/credit/accounts/{id}/history", s.handleHistory)
 	mux.HandleFunc("POST /api/v1/credit/spends", s.handlePostSpend)
 	mux.HandleFunc("POST /api/v1/assessments", s.handleRecordAssessment)
+	mux.HandleFunc("POST /api/v1/assessments/{id}/answers", s.handleAnswerAssessment)
+	mux.HandleFunc("GET /api/v1/assessments/{id}/answer", s.handleGetAnswer)
 	mux.HandleFunc("POST /api/v1/disputes", s.handleOpenDispute)
 	mux.HandleFunc("GET /api/v1/disputes/{id}", s.handleGetDispute)
 	mux.HandleFunc("POST /api/v1/disputes/{id}/withdraw", s.handleWithdrawDispute)

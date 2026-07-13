@@ -156,6 +156,13 @@ func (a *recordAnchors) Sealed(exchange covenant.ExchangeRef, assessor, subject 
 		(bytes.Equal(e.Proposer, subjectKey) && bytes.Equal(e.Acceptor, assessorKey))
 }
 
+// Adjudicated implements the adjudication-relation anchor; the composition
+// test exercises trade assessments only, so it answers false and the typed
+// relations are covered by the covenant package's own tests.
+func (a *recordAnchors) Adjudicated(covenant.ExchangeRef, covenant.MemberID, covenant.MemberID) bool {
+	return false
+}
+
 // disputeAnchors implements dispute.Anchors. It is the dispute-side twin of
 // recordAnchors: same join to the operator's record log on Entry.ID(), but the
 // dispute port speaks raw ed25519 public keys (not covenant MemberIDs), so the
@@ -445,6 +452,7 @@ func TestMemberStoryEndToEnd(t *testing.T) {
 		Assessor: aliceMember,
 		Subject:  bobMember,
 		Exchange: ref,
+		Relation: covenant.RelationTrade,
 		Category: "reliability",
 		Level:    covenant.LevelDelight,
 		IssuedAt: time.Now().UTC(),
@@ -457,6 +465,7 @@ func TestMemberStoryEndToEnd(t *testing.T) {
 		Assessor: bobMember,
 		Subject:  aliceMember,
 		Exchange: ref,
+		Relation: covenant.RelationTrade,
 		Category: "reliability",
 		Level:    covenant.LevelBasicSatisfaction,
 		IssuedAt: time.Now().UTC(),
@@ -484,6 +493,7 @@ func TestMemberStoryEndToEnd(t *testing.T) {
 		Assessor:    aliceMember,
 		Subject:     bobMember,
 		Exchange:    ref,
+		Relation:    covenant.RelationTrade,
 		Category:    "support",
 		Level:       covenant.LevelNoTrust,
 		CommentHash: [32]byte(commentHash),
@@ -522,25 +532,25 @@ func TestMemberStoryEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bob standing: %v", err)
 	}
-	assertDist(bobStanding.Category("reliability"), map[covenant.Level]int{covenant.LevelDelight: 1})
-	assertDist(bobStanding.Category("support"), map[covenant.Level]int{covenant.LevelNoTrust: 1})
-	assertDist(bobStanding.Overall(), map[covenant.Level]int{
+	assertDist(bobStanding.Relation(covenant.RelationTrade).Category("reliability"), map[covenant.Level]int{covenant.LevelDelight: 1})
+	assertDist(bobStanding.Relation(covenant.RelationTrade).Category("support"), map[covenant.Level]int{covenant.LevelNoTrust: 1})
+	assertDist(bobStanding.Relation(covenant.RelationTrade).Overall(), map[covenant.Level]int{
 		covenant.LevelDelight: 1,
 		covenant.LevelNoTrust: 1,
 	})
-	if got := bobStanding.Total(); got != 2 {
+	if got := bobStanding.Relation(covenant.RelationTrade).Total(); got != 2 {
 		t.Fatalf("bob standing total: got %d, want 2", got)
 	}
-	if got := bobStanding.Harm(); got != 1 {
+	if got := bobStanding.Relation(covenant.RelationTrade).Harm(); got != 1 {
 		t.Fatalf("bob Harm(): got %d, want 1 — the -1 must stay surfaced after its comment text is erased", got)
 	}
 	aliceStanding, err := st.book.Standing(aliceMember)
 	if err != nil {
 		t.Fatalf("alice standing: %v", err)
 	}
-	assertDist(aliceStanding.Category("reliability"), map[covenant.Level]int{covenant.LevelBasicSatisfaction: 1})
-	assertDist(aliceStanding.Overall(), map[covenant.Level]int{covenant.LevelBasicSatisfaction: 1})
-	if got := aliceStanding.Harm(); got != 0 {
+	assertDist(aliceStanding.Relation(covenant.RelationTrade).Category("reliability"), map[covenant.Level]int{covenant.LevelBasicSatisfaction: 1})
+	assertDist(aliceStanding.Relation(covenant.RelationTrade).Overall(), map[covenant.Level]int{covenant.LevelBasicSatisfaction: 1})
+	if got := aliceStanding.Relation(covenant.RelationTrade).Harm(); got != 0 {
 		t.Fatalf("alice Harm(): got %d, want 0", got)
 	}
 }
@@ -608,6 +618,7 @@ func TestModeIndependence(t *testing.T) {
 			Assessor: aliceMember,
 			Subject:  bobMember,
 			Exchange: covenant.ExchangeRef(e.ID()),
+			Relation: covenant.RelationTrade,
 			Category: "performance",
 			Level:    covenant.LevelNoNegativeConsequences,
 			IssuedAt: at,
@@ -713,6 +724,7 @@ func TestNegativeJoins(t *testing.T) {
 		Assessor: aliceMember,
 		Subject:  bobMember,
 		Exchange: fabricated,
+		Relation: covenant.RelationTrade,
 		Category: "reliability",
 		Level:    covenant.LevelBasicPromise,
 		IssuedAt: time.Now().UTC(),
@@ -731,6 +743,7 @@ func TestNegativeJoins(t *testing.T) {
 		Assessor: carolMember,
 		Subject:  bobMember,
 		Exchange: covenant.ExchangeRef(entry.ID()),
+		Relation: covenant.RelationTrade,
 		Category: "reliability",
 		Level:    covenant.LevelBasicPromise,
 		IssuedAt: time.Now().UTC(),
