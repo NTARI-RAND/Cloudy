@@ -40,7 +40,11 @@ func newWitnessFixture(t *testing.T) witnessFixture {
 		}
 	}
 	f.cp5 = sign(l.Checkpoint(testInstant))
-	f.links2to5 = mustLeaves(t, l, 2)
+	proof, err := l.ProveConsistency(2)
+	if err != nil {
+		t.Fatalf("ProveConsistency(2): %v", err)
+	}
+	f.links2to5 = proof
 
 	fork := f.cp2
 	fork.Head[0] ^= 1

@@ -10,14 +10,16 @@ import (
 // domainCheckpoint tags checkpoint signing payloads; an operator's
 // checkpoint signature is never valid under any other tag, so it can never
 // pose as a member seal or a witness countersignature.
-const domainCheckpoint = "drops/checkpoint/v0"
+const domainCheckpoint = "drops/checkpoint/v1"
 
 // Checkpoint is an operator's signed, monotonic commitment to its log head —
-// the Certificate Transparency signed-tree-head analogue for a linear chain.
+// the Certificate Transparency signed tree head. v1: Head is the RFC-6962
+// Merkle tree head over the leaf IDs (the v0 linear fold is gone, decided
+// 2026-07-12 before any durable log existed).
 type Checkpoint struct {
 	Log       Hash      // LogID of the operator's log
 	Size      uint64    // number of entries committed
-	Head      Hash      // chain hash after entry Size-1 (fold seeded with Log); the LogID seed when Size == 0
+	Head      Hash      // Merkle tree head over leaves [0, Size); the LogID seed when Size == 0
 	IssuedAt  time.Time // UTC
 	Signature []byte    // ed25519 by the operator; excluded from CanonicalBytes
 }

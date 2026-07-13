@@ -5,19 +5,22 @@ import (
 )
 
 // Proof is what a member keeps beside an entry to later prove its inclusion
-// under a checkpoint, offline and without the operator. Nothing in it is
-// trusted: verification recomputes every hash.
+// under a checkpoint, offline and without the operator: the entry's sequence
+// number and its RFC-6962 audit path — ~log2(size) hashes however large the
+// log grows, which is what makes verification feasible on an entry-level
+// device (the open-problem-8 floor). Nothing in it is trusted: verification
+// recomputes every hash.
 type Proof struct {
-	Prior Hash   // chain head immediately before the entry (the LogID seed for the first entry)
-	Links []Hash // leaf hashes (Entry.ID) of every later entry up to the checkpointed head
+	Seq  uint64 // the entry's position in the log
+	Path []Hash // sibling subtree hashes, leaf-adjacent first, root-adjacent last
 }
 
 // VerifyInclusion reports whether e is a fully sealed covenant committed at
-// position cp.Size-1-len(p.Links) of cp's log: it requires e.Verify(),
-// cp.Verify(operator), e.Log == cp.Log, and that folding e.ID() over p.Prior
-// and p.Links yields cp.Head. One call checks everything; there is no
-// half-verification to forget. It does NOT prove non-inclusion or liveness:
-// an operator that never appended the entry simply cannot produce a proof.
+// position p.Seq of cp's log: it requires e.Verify(), cp.Verify(operator),
+// e.Log == cp.Log, and that the audit path recomputes cp.Head from e.ID().
+// One call checks everything; there is no half-verification to forget. It
+// does NOT prove non-inclusion or liveness: an operator that never appended
+// the entry simply cannot produce a proof.
 func VerifyInclusion(e Entry, p Proof, cp Checkpoint, operator ed25519.PublicKey) bool {
 	if !e.Verify() {
 		return false
@@ -28,36 +31,35 @@ func VerifyInclusion(e Entry, p Proof, cp Checkpoint, operator ed25519.PublicKey
 	if e.Log != cp.Log {
 		return false
 	}
-	if cp.Size < uint64(len(p.Links))+1 {
-		return false
-	}
-	h := chainStep(p.Prior, e.ID())
-	for _, link := range p.Links {
-		h = chainStep(h, link)
-	}
-	return h == cp.Head
+	root, ok := rootFromPath(e.ID(), p.Seq, cp.Size, p.Path)
+	return ok && root == cp.Head
 }
 
 // VerifyConsistency reports whether newer extends older without rewrite:
-// both checkpoints verify under operator, same Log,
-// newer.Size == older.Size+len(links), and folding links over older.Head
-// yields newer.Head. Failure against two operator-signed checkpoints is
-// portable fork evidence — this is how any member or witness detects a
-// silent edit or deletion. It proves nothing about entries the older
-// checkpoint never covered.
-func VerifyConsistency(older, newer Checkpoint, links []Hash, operator ed25519.PublicKey) bool {
+// both checkpoints verify under operator, same Log, and the RFC-6962
+// consistency proof recomputes BOTH heads — older.Head from its components
+// and newer.Head from the same components plus the extension. Failure
+// against two operator-signed checkpoints is portable fork evidence — this
+// is how any member or witness detects a silent edit or deletion. It proves
+// nothing about entries the older checkpoint never covered.
+//
+// The empty older log (Size 0) is consistent with anything on an empty
+// proof; equal sizes are consistent only when the heads are equal.
+func VerifyConsistency(older, newer Checkpoint, proof []Hash, operator ed25519.PublicKey) bool {
 	if !older.Verify(operator) || !newer.Verify(operator) {
 		return false
 	}
 	if older.Log != newer.Log {
 		return false
 	}
-	if newer.Size != older.Size+uint64(len(links)) {
+	switch {
+	case older.Size > newer.Size:
 		return false
+	case older.Size == 0:
+		return len(proof) == 0
+	case older.Size == newer.Size:
+		return len(proof) == 0 && older.Head == newer.Head
 	}
-	h := older.Head
-	for _, link := range links {
-		h = chainStep(h, link)
-	}
-	return h == newer.Head
+	oldR, newR, rest, ok := consRoots(older.Size, newer.Size, true, proof, older.Head)
+	return ok && len(rest) == 0 && oldR == older.Head && newR == newer.Head
 }
