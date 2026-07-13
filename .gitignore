@@ -1,0 +1,25 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test / build artifacts
+*.test
+*.out
+/.gotmp/
+
+# Secrets / env
+.env
+.env.*
+*.pem
+*.key
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Stale archives / snapshots (Cloudy.tar.gz is a pre-LBTAS snapshot)
+*.tar.gz
+*.zip
