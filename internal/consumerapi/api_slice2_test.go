@@ -1,0 +1,337 @@
+package consumerapi
+
+import (
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/NTARI-RAND/Cloudy/internal/covenant"
+	"github.com/NTARI-RAND/Cloudy/internal/dispute"
+	"github.com/NTARI-RAND/Cloudy/internal/economy"
+	"github.com/NTARI-RAND/Cloudy/internal/record"
+)
+
+// sealExchange drives the full client-side dialog-seal flow over the API:
+// fetch the operator's log identity, build the entry, seal it with BOTH
+// member keys locally (keys never touch the server), and post it. It returns
+// the leaf ID hex — THE cross-layer exchange reference.
+func sealExchange(t *testing.T, h http.Handler, pubA ed25519.PublicKey, privA ed25519.PrivateKey, pubB ed25519.PublicKey, privB ed25519.PrivateKey) string {
+	t.Helper()
+	rec, body := do(t, h, "GET", "/api/v1/drops/log", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("drops/log: code %d body %s", rec.Code, rec.Body.String())
+	}
+	logHex, _ := body["log_id"].(string)
+	logRaw, err := hex.DecodeString(logHex)
+	if err != nil || len(logRaw) != 32 {
+		t.Fatalf("drops/log returned unusable log_id %q", logHex)
+	}
+	var logID record.Hash
+	copy(logID[:], logRaw)
+
+	e, err := record.NewEntry(logID, pubA, pubB, record.HashContent([]byte("member-local narrative")), record.Hash{}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Seal(privA); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Seal(privB); err != nil {
+		t.Fatal(err)
+	}
+	rec, body = do(t, h, "POST", "/api/v1/drops", dropRequest{
+		Log:          logHex,
+		Proposer:     hex.EncodeToString(pubA),
+		Acceptor:     hex.EncodeToString(pubB),
+		Content:      hex.EncodeToString(e.Content[:]),
+		Nonce:        hex.EncodeToString(e.Nonce[:]),
+		SealedAt:     e.SealedAt.Format(time.RFC3339Nano),
+		ProposerSeal: hex.EncodeToString(e.ProposerSeal),
+		AcceptorSeal: hex.EncodeToString(e.AcceptorSeal),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST drops: code %d body %s", rec.Code, rec.Body.String())
+	}
+	id, _ := body["id"].(string)
+	want := e.ID()
+	if id != hex.EncodeToString(want[:]) {
+		t.Fatalf("POST drops returned id %q, want the entry's leaf ID %q", id, hex.EncodeToString(want[:]))
+	}
+	return id
+}
+
+func TestDropsAppendReadAndStandInLabel(t *testing.T) {
+	h := newTestServer(t)
+	pubA, privA := key(1)
+	pubB, privB := key(2)
+	registerMember(t, h, pubA, privA)
+	registerMember(t, h, pubB, privB)
+
+	id := sealExchange(t, h, pubA, privA, pubB, privB)
+
+	rec, body := do(t, h, "GET", "/api/v1/drops/"+id, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET drop: code %d body %s", rec.Code, rec.Body.String())
+	}
+	if body["proposer"] != hex.EncodeToString(pubA) || body["acceptor"] != hex.EncodeToString(pubB) {
+		t.Fatalf("GET drop returned wrong parties: %v", body)
+	}
+	if _, hasCorrects := body["corrects"]; hasCorrects {
+		t.Fatalf("plain covenant must omit corrects, got %v", body["corrects"])
+	}
+
+	// The checkpoint MUST carry the honest single-witness stand-in label, and
+	// its signature must verify under the operator key the API itself serves.
+	rec, body = do(t, h, "GET", "/api/v1/drops/checkpoints", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET checkpoints: code %d", rec.Code)
+	}
+	if body["stand_in"] != true {
+		t.Fatal("zero-witness deployment did not label itself a stand-in; misrepresenting federation is forbidden")
+	}
+	if body["size"].(float64) != 1 {
+		t.Fatalf("checkpoint size = %v, want 1", body["size"])
+	}
+	_, lg := do(t, h, "GET", "/api/v1/drops/log", nil)
+	opKey, err := hex.DecodeString(lg["operator_key"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cp record.Checkpoint
+	logRaw, _ := hex.DecodeString(body["log"].(string))
+	headRaw, _ := hex.DecodeString(body["head"].(string))
+	copy(cp.Log[:], logRaw)
+	copy(cp.Head[:], headRaw)
+	cp.Size = uint64(body["size"].(float64))
+	cp.IssuedAt, err = time.Parse(time.RFC3339Nano, body["issued_at"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp.Signature, _ = hex.DecodeString(body["signature"].(string))
+	if !cp.Verify(ed25519.PublicKey(opKey)) {
+		t.Fatal("served checkpoint does not verify under the served operator key")
+	}
+
+	// Unregistered parties cannot enter the log through this ingress.
+	pubC, privC := key(3)
+	e, err := record.NewEntry(cp.Log, pubA, pubC, record.HashContent([]byte("n")), record.Hash{}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = e.Seal(privA)
+	_ = e.Seal(privC)
+	rec, _ = do(t, h, "POST", "/api/v1/drops", dropRequest{
+		Log:          hex.EncodeToString(cp.Log[:]),
+		Proposer:     hex.EncodeToString(pubA),
+		Acceptor:     hex.EncodeToString(pubC),
+		Content:      hex.EncodeToString(e.Content[:]),
+		Nonce:        hex.EncodeToString(e.Nonce[:]),
+		SealedAt:     e.SealedAt.Format(time.RFC3339Nano),
+		ProposerSeal: hex.EncodeToString(e.ProposerSeal),
+		AcceptorSeal: hex.EncodeToString(e.AcceptorSeal),
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unregistered acceptor: code %d, want 400", rec.Code)
+	}
+}
+
+func TestAssessmentsAnchorToSealedDialogs(t *testing.T) {
+	h := newTestServer(t)
+	pubA, privA := key(1)
+	pubB, privB := key(2)
+	registerMember(t, h, pubA, privA)
+	registerMember(t, h, pubB, privB)
+	id := sealExchange(t, h, pubA, privA, pubB, privB)
+
+	assess := func(exchangeHex string, level int8, commentHash string) (*int, string) {
+		exRaw, _ := hex.DecodeString(exchangeHex)
+		var ex covenant.ExchangeRef
+		copy(ex[:], exRaw)
+		a := covenant.Assessment{
+			Assessor: covenant.MemberIDFor(platform, pubA),
+			Subject:  covenant.MemberIDFor(platform, pubB),
+			Exchange: ex,
+			Category: "reliability",
+			Level:    covenant.Level(level),
+			IssuedAt: time.Now().UTC(),
+		}
+		if commentHash != "" {
+			raw, _ := hex.DecodeString(commentHash)
+			copy(a.CommentHash[:], raw)
+		}
+		a.Sign(privA)
+		rec, body := do(t, h, "POST", "/api/v1/assessments", assessmentRequest{
+			Assessor:    string(a.Assessor),
+			Subject:     string(a.Subject),
+			Exchange:    exchangeHex,
+			Category:    a.Category,
+			Level:       level,
+			CommentHash: commentHash,
+			IssuedAt:    a.IssuedAt.Format(time.RFC3339Nano),
+			Signature:   hex.EncodeToString(a.Signature),
+		})
+		errMsg, _ := body["error"].(string)
+		return &rec.Code, errMsg
+	}
+
+	if code, msg := assess(id, 3, ""); *code != http.StatusOK {
+		t.Fatalf("anchored assessment refused: %d %s", *code, msg)
+	}
+	// The same assessor re-assessing the same exchange under the same
+	// category is a duplicate, reported as a conflict.
+	if code, _ := assess(id, 2, ""); *code != http.StatusConflict {
+		t.Fatalf("duplicate assessment: code %d, want 409", *code)
+	}
+	// An exchange that never sealed anchors nothing.
+	fake := sha256.Sum256([]byte("no such exchange"))
+	if code, _ := assess(hex.EncodeToString(fake[:]), 3, ""); *code != http.StatusBadRequest {
+		t.Fatalf("unanchored assessment: code %d, want 400", *code)
+	}
+
+	// Standing serves distributions and the harm count — never an average.
+	rec, body := do(t, h, "GET", "/api/v1/members/"+string(covenant.MemberIDFor(platform, pubB))+"/standing", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("standing: code %d", rec.Code)
+	}
+	overall := body["overall"].(map[string]any)
+	if overall["total"].(float64) != 1 {
+		t.Fatalf("standing total = %v, want 1", overall["total"])
+	}
+	counts := overall["counts"].(map[string]any)
+	if counts[covenant.Level(3).String()].(float64) != 1 {
+		t.Fatalf("standing counts = %v, want one at %q", counts, covenant.Level(3).String())
+	}
+	for k := range body {
+		if k == "average" || k == "score" || k == "rating" {
+			t.Fatalf("standing response leaked a scalar %q — the covenant forbids the average", k)
+		}
+	}
+}
+
+func TestSpendsRefusedWhileEscrow(t *testing.T) {
+	h := newTestServer(t)
+	pubA, privA := key(1)
+	pubB, privB := key(2)
+	registerMember(t, h, pubA, privA)
+	registerMember(t, h, pubB, privB)
+	id := sealExchange(t, h, pubA, privA, pubB, privB)
+
+	rec, body := do(t, h, "GET", "/api/v1/credit/policy", nil)
+	if rec.Code != http.StatusOK || body["mode"] != "escrow" {
+		t.Fatalf("policy: code %d body %v, want escrow mode", rec.Code, body)
+	}
+
+	exRaw, _ := hex.DecodeString(id)
+	var ex [32]byte
+	copy(ex[:], exRaw)
+	sp := economy.Spend{
+		Platform:     platform,
+		From:         economy.AccountIDFor(platform, pubA),
+		To:           economy.AccountIDFor(platform, pubB),
+		Amount:       5,
+		ExchangeHash: ex,
+		IssuedAt:     time.Now().UTC(),
+		Nonce:        1,
+	}
+	sp.Sign(privA)
+	rec, body = do(t, h, "POST", "/api/v1/credit/spends", spendRequest{
+		From:         hex.EncodeToString(sp.From[:]),
+		To:           hex.EncodeToString(sp.To[:]),
+		Amount:       uint64(sp.Amount),
+		ExchangeHash: id,
+		IssuedAt:     sp.IssuedAt.Format(time.RFC3339Nano),
+		Nonce:        sp.Nonce,
+		Signature:    hex.EncodeToString(sp.Signature),
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("spend in escrow mode: code %d body %v, want 409 — the escrow wall must hold", rec.Code, body)
+	}
+
+	// Balances and history stay a deterministic function of the (empty) sealed
+	// spend record.
+	acctA := hex.EncodeToString(sp.From[:])
+	rec, body = do(t, h, "GET", "/api/v1/credit/accounts/"+acctA+"/balance", nil)
+	if rec.Code != http.StatusOK || body["balance"].(float64) != 0 {
+		t.Fatalf("balance: code %d body %v, want 0", rec.Code, body)
+	}
+	rec, body = do(t, h, "GET", "/api/v1/credit/accounts/"+acctA+"/history", nil)
+	if rec.Code != http.StatusOK || len(body["spends"].([]any)) != 0 {
+		t.Fatalf("history: code %d body %v, want no spends", rec.Code, body)
+	}
+}
+
+func TestDisputeFileWithdrawLifecycle(t *testing.T) {
+	h := newTestServer(t)
+	pubA, privA := key(1)
+	pubB, privB := key(2)
+	registerMember(t, h, pubA, privA)
+	registerMember(t, h, pubB, privB)
+	id := sealExchange(t, h, pubA, privA, pubB, privB)
+
+	exRaw, _ := hex.DecodeString(id)
+	var ex dispute.ExchangeRef
+	copy(ex[:], exRaw)
+	reason := sha256.Sum256([]byte("member-local grievance narrative"))
+	o, err := dispute.NewOpening(platform, pubA, pubB, ex, reason, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Sign(privA); err != nil {
+		t.Fatal(err)
+	}
+	rec, body := do(t, h, "POST", "/api/v1/disputes", openDisputeRequest{
+		Complainant: hex.EncodeToString(pubA),
+		Respondent:  hex.EncodeToString(pubB),
+		Exchange:    id,
+		ReasonHash:  hex.EncodeToString(o.ReasonHash[:]),
+		Nonce:       hex.EncodeToString(o.Nonce[:]),
+		OpenedAt:    o.OpenedAt.Format(time.RFC3339Nano),
+		Signature:   hex.EncodeToString(o.Signature),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("open dispute: code %d body %s", rec.Code, rec.Body.String())
+	}
+	dID, _ := body["dispute_id"].(string)
+	wantID := o.ID()
+	if dID != hex.EncodeToString(wantID[:]) {
+		t.Fatalf("dispute_id %q, want Opening.ID() %q", dID, hex.EncodeToString(wantID[:]))
+	}
+
+	rec, body = do(t, h, "GET", "/api/v1/disputes/"+dID, nil)
+	if rec.Code != http.StatusOK || body["state"] != "open" {
+		t.Fatalf("case: code %d state %v, want open", rec.Code, body["state"])
+	}
+
+	// Only the complainant can withdraw: the respondent's signature is refused.
+	wd := dispute.Withdrawal{Platform: platform, Dispute: dispute.DisputeID(wantID), WithdrawnAt: time.Now().UTC()}
+	wd.Sign(privB)
+	rec, _ = do(t, h, "POST", "/api/v1/disputes/"+dID+"/withdraw", withdrawRequest{
+		WithdrawnAt: wd.WithdrawnAt.Format(time.RFC3339Nano),
+		Signature:   hex.EncodeToString(wd.Signature),
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("respondent withdrawal: code %d, want 400", rec.Code)
+	}
+
+	wd.Sign(privA)
+	rec, _ = do(t, h, "POST", "/api/v1/disputes/"+dID+"/withdraw", withdrawRequest{
+		WithdrawnAt: wd.WithdrawnAt.Format(time.RFC3339Nano),
+		Signature:   hex.EncodeToString(wd.Signature),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("complainant withdrawal: code %d body %s", rec.Code, rec.Body.String())
+	}
+	rec, body = do(t, h, "GET", "/api/v1/disputes/"+dID, nil)
+	if rec.Code != http.StatusOK || body["state"] != "withdrawn" {
+		t.Fatalf("case after withdrawal: code %d state %v, want withdrawn", rec.Code, body["state"])
+	}
+
+	unknown := sha256.Sum256([]byte("no such case"))
+	rec, _ = do(t, h, "GET", "/api/v1/disputes/"+hex.EncodeToString(unknown[:]), nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown dispute: code %d, want 404", rec.Code)
+	}
+}
