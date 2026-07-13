@@ -127,8 +127,12 @@ func TestImportGraph(t *testing.T) {
 		}
 	}
 
-	// (b) Only the two composition roots may import more than one JFA package.
-	allowedRoots := map[string]bool{"cmd/cloudy": true, "test/composition": true}
+	// (b) Only the composition roots may import more than one JFA package.
+	// internal/consumerapi is the member-facing composition root by design
+	// (Phase-1 design §2: cloudyd = composition root + consumer JSON API; the
+	// cmd/cloudyd main stays a thin flag-parsing shell over it, importing no
+	// JFA package itself). Everything else composes nothing.
+	allowedRoots := map[string]bool{"cmd/cloudy": true, "internal/consumerapi": true, "test/composition": true}
 	var roots []string
 	for dir, set := range imports {
 		n := 0
@@ -145,14 +149,19 @@ func TestImportGraph(t *testing.T) {
 		}
 	}
 
-	// Positive control proving the scan has teeth: both known composition
-	// roots must be found, each importing all three JFA packages — if the
+	// Positive control proving the scan has teeth: every known composition
+	// root must be found, each importing all four JFA packages — if the
 	// walk or the parse ever silently skipped them, this fails rather than
 	// the tripwire going green on an empty graph.
 	sort.Strings(roots)
-	want := []string{"cmd/cloudy", "test/composition"}
-	if len(roots) != len(want) || roots[0] != want[0] || roots[1] != want[1] {
+	want := []string{"cmd/cloudy", "internal/consumerapi", "test/composition"}
+	if len(roots) != len(want) {
 		t.Fatalf("composition roots found: %v, want exactly %v", roots, want)
+	}
+	for i := range want {
+		if roots[i] != want[i] {
+			t.Fatalf("composition roots found: %v, want exactly %v", roots, want)
+		}
 	}
 	for _, dir := range want {
 		for _, jfa := range jfaImportPaths {
