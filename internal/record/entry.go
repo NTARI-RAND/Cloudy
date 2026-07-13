@@ -39,11 +39,17 @@ func HashContent(content []byte) Hash {
 	return Hash(sha256.Sum256(canon.New(domainContent).Bytes(content).Sum()))
 }
 
+// domainLogID tags the LogID derivation — a log's identity, derived from
+// its operator key, never chosen text; it is the empty log's head and scopes
+// every entry and checkpoint. v1: the v0 chain-fold arity is gone (the tree
+// replaced it), so the derivation carries its own single-purpose tag.
+const domainLogID = "drops/logid/v1"
+
 // LogID derives a log's identity from its operator's public key — derived,
-// never chosen, so it cannot carry text and cannot be squatted; it seeds the
-// log's hash chain and scopes every entry and checkpoint.
+// never chosen, so it cannot carry text and cannot be squatted; it is the
+// head of the empty log and scopes every entry and checkpoint.
 func LogID(operator ed25519.PublicKey) Hash {
-	return Hash(sha256.Sum256(canon.New(domainChain).Bytes(operator).Sum()))
+	return Hash(sha256.Sum256(canon.New(domainLogID).Bytes(operator).Sum()))
 }
 
 // Entry is one dialog-sealed covenant between two members: fixed-size

@@ -2,24 +2,10 @@ package record
 
 import (
 	"crypto/ed25519"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/NTARI-RAND/sohocloud-protocol/canon"
 )
-
-// domainChain tags the one chain derivation in both its arities: the
-// single-field seed (LogID over the operator key) and the two-field fold
-// step (previous head, leaf). Canon's length prefixes keep the two shapes
-// disjoint, and neither is a signature payload.
-const domainChain = "drops/chain/v0"
-
-// chainStep folds one leaf hash into the running chain head.
-func chainStep(prev, leaf Hash) Hash {
-	return Hash(sha256.Sum256(canon.New(domainChain).Bytes(prev[:]).Bytes(leaf[:]).Sum()))
-}
 
 // Store is the minimal append-only persistence surface: update and delete
 // are absent verbs, not forbidden ones. Log never trusts a Store — chains
@@ -73,16 +59,16 @@ func (s *MemStore) Len() (uint64, error) {
 	return uint64(len(s.entries)), nil
 }
 
-// Log is ONE operator's record: a LogID-seeded hash chain over dialog-sealed
-// entries. No package-level log, no merge, no cross-log query or ordering
-// exists anywhere in the surface. The operator's entire power is assigning
-// sequence numbers: it holds no key that can produce a member seal, so it
-// can order covenants but never author, amend, or remove one.
+// Log is ONE operator's record: an RFC-6962-shaped Merkle tree over
+// dialog-sealed entries, identified by LogID. No package-level log, no
+// merge, no cross-log query or ordering exists anywhere in the surface. The
+// operator's entire power is assigning sequence numbers: it holds no key
+// that can produce a member seal, so it can order covenants but never
+// author, amend, or remove one.
 type Log struct {
 	id    Hash
 	store Store
-	heads []Hash          // heads[i] is the chain head before entry i; heads[len(leaves)] is the current head
-	leafs []Hash          // leaf IDs in sequence order
+	leafs []Hash          // leaf IDs (Entry.ID) in sequence order — the tree's leaves
 	index map[Hash]uint64 // leaf ID -> sequence, for dedup and Corrects resolution
 }
 
@@ -99,11 +85,9 @@ func OpenLog(operator ed25519.PublicKey, s Store) (*Log, error) {
 	if s == nil {
 		return nil, errors.New("record: nil store")
 	}
-	id := LogID(operator)
 	l := &Log{
-		id:    id,
+		id:    LogID(operator),
 		store: s,
-		heads: []Hash{id},
 		index: make(map[Hash]uint64),
 	}
 	n, err := s.Len()
@@ -145,12 +129,10 @@ func (l *Log) check(e Entry) (Hash, error) {
 	return leaf, nil
 }
 
-// admit folds an already-checked leaf into the in-memory chain state.
+// admit adds an already-checked leaf to the in-memory tree state.
 func (l *Log) admit(leaf Hash) {
-	seq := uint64(len(l.leafs))
-	l.index[leaf] = seq
+	l.index[leaf] = uint64(len(l.leafs))
 	l.leafs = append(l.leafs, leaf)
-	l.heads = append(l.heads, chainStep(l.heads[seq], leaf))
 }
 
 // Append admits e only if e.Verify() passes, e.Log equals this log's LogID,
@@ -170,31 +152,54 @@ func (l *Log) Append(e Entry) (uint64, error) {
 	return seq, nil
 }
 
-// Checkpoint returns the unsigned checkpoint over the current head at UTC
-// instant at; the operator seals it with Checkpoint.Sign. Sizes are
+// Checkpoint returns the unsigned checkpoint over the current tree head at
+// UTC instant at; the operator seals it with Checkpoint.Sign. Sizes are
 // monotonic because the log only appends. The head of an empty log is the
-// LogID seed.
+// LogID seed; otherwise it is the Merkle tree head over the leaf IDs.
 func (l *Log) Checkpoint(at time.Time) Checkpoint {
 	size := uint64(len(l.leafs))
+	head := l.id
+	if size > 0 {
+		head = mth(l.leafs)
+	}
 	return Checkpoint{
 		Log:      l.id,
 		Size:     size,
-		Head:     l.heads[size],
+		Head:     head,
 		IssuedAt: at,
 	}
 }
 
 // Prove returns the inclusion proof for the entry at seq relative to the
 // current head; issue the matching Checkpoint in the same quiescent state.
+// The proof is an RFC-6962 audit path: ~log2(size) sibling hashes, small
+// enough to hold and verify on an entry-level device regardless of how
+// large the log grows.
 func (l *Log) Prove(seq uint64) (Proof, error) {
 	size := uint64(len(l.leafs))
 	if seq >= size {
 		return Proof{}, fmt.Errorf("record: sequence %d out of range (size %d)", seq, size)
 	}
 	return Proof{
-		Prior: l.heads[seq],
-		Links: append([]Hash(nil), l.leafs[seq+1:]...),
+		Seq:  seq,
+		Path: provePath(seq, l.leafs),
 	}, nil
+}
+
+// ProveConsistency returns the RFC-6962 consistency proof showing the
+// current tree extends the tree that had `size` entries — the extension
+// evidence a witness needs before countersigning a newer checkpoint. A size
+// of zero needs no proof (everything extends the empty log), and the
+// current size yields the empty proof (a tree extends itself).
+func (l *Log) ProveConsistency(size uint64) ([]Hash, error) {
+	current := uint64(len(l.leafs))
+	if size > current {
+		return nil, fmt.Errorf("record: size %d exceeds log size %d", size, current)
+	}
+	if size == 0 || size == current {
+		return []Hash{}, nil
+	}
+	return proveConsistency(size, l.leafs), nil
 }
 
 // LeavesSince returns the leaf hashes of entries at positions

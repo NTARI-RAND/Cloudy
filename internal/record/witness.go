@@ -11,7 +11,7 @@ import (
 // domainWitness tags witness countersignature payloads, distinct from the
 // checkpoint tag, so an operator signature can never pose as a witness
 // cosignature or vice versa.
-const domainWitness = "drops/witness/v0"
+const domainWitness = "drops/witness/v1"
 
 // witnessPayload is the canonical payload a witness countersigns: the
 // checkpoint's canonical bytes wrapped under the witness domain tag.
@@ -78,11 +78,12 @@ func (w *Witness) Key() ed25519.PublicKey {
 
 // Countersign verifies cp under operator, refuses when operator equals the
 // witness's own key, refuses any rollback or fork against the last
-// checkpoint it cosigned for cp.Log (using sinceLeaves as extension evidence
-// via VerifyConsistency), then returns its cosignature and remembers cp.
-// Countersigning a rewritten head is the one thing a witness exists to never
-// do, and here it is enforced, not advised.
-func (w *Witness) Countersign(cp Checkpoint, operator ed25519.PublicKey, sinceLeaves []Hash) (Countersignature, error) {
+// checkpoint it cosigned for cp.Log (using the RFC-6962 consistency proof as
+// extension evidence via VerifyConsistency; Log.ProveConsistency produces
+// it), then returns its cosignature and remembers cp. Countersigning a
+// rewritten head is the one thing a witness exists to never do, and here it
+// is enforced, not advised.
+func (w *Witness) Countersign(cp Checkpoint, operator ed25519.PublicKey, consistencyProof []Hash) (Countersignature, error) {
 	if len(w.priv) != ed25519.PrivateKeySize {
 		return Countersignature{}, errors.New("record: witness key is malformed")
 	}
@@ -93,7 +94,7 @@ func (w *Witness) Countersign(cp Checkpoint, operator ed25519.PublicKey, sinceLe
 		return Countersignature{}, errors.New("record: checkpoint does not verify under operator")
 	}
 	if prev, seen := w.last[cp.Log]; seen {
-		if !VerifyConsistency(prev, cp, sinceLeaves, operator) {
+		if !VerifyConsistency(prev, cp, consistencyProof, operator) {
 			return Countersignature{}, errors.New("record: checkpoint is not a consistent extension of the last cosigned checkpoint (rollback or fork refused)")
 		}
 	}

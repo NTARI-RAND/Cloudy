@@ -302,8 +302,8 @@ func TestInclusionExhaustive(t *testing.T) {
 			if !VerifyInclusion(entries[seq], p, tc.cp, op.pub) {
 				t.Fatalf("inclusion of entry %d under size-%d checkpoint must verify", seq, tc.cp.Size)
 			}
-			if got := tc.cp.Size - 1 - uint64(len(p.Links)); got != uint64(seq) {
-				t.Fatalf("proof position = %d, want %d", got, seq)
+			if p.Seq != uint64(seq) {
+				t.Fatalf("proof position = %d, want %d", p.Seq, seq)
 			}
 		}
 	}
@@ -317,18 +317,23 @@ func TestInclusionExhaustive(t *testing.T) {
 	if err := half.Seal(a.priv); err != nil {
 		t.Fatalf("Seal: %v", err)
 	}
+	dishonestLeaves := make([]Hash, 0, 6)
+	for _, e := range entries {
+		dishonestLeaves = append(dishonestLeaves, e.ID())
+	}
+	dishonestLeaves = append(dishonestLeaves, half.ID())
 	dishonest := Checkpoint{
 		Log:      id,
 		Size:     cp5.Size + 1,
-		Head:     chainStep(cp5.Head, half.ID()),
+		Head:     mth(dishonestLeaves),
 		IssuedAt: testInstant,
 	}
 	dishonest.Sign(op.priv)
 	if !dishonest.Verify(op.pub) {
 		t.Fatal("setup: dishonest checkpoint should carry a valid operator signature")
 	}
-	if VerifyInclusion(half, Proof{Prior: cp5.Head}, dishonest, op.pub) {
-		t.Fatal("a half-sealed entry must never verify as included, even hand-chained by the operator")
+	if VerifyInclusion(half, Proof{Seq: 5, Path: provePath(5, dishonestLeaves)}, dishonest, op.pub) {
+		t.Fatal("a half-sealed entry must never verify as included, even hand-treed by the operator")
 	}
 
 	// A foreign entry (another operator's log) never verifies here.
@@ -337,17 +342,23 @@ func TestInclusionExhaustive(t *testing.T) {
 		t.Fatal("a foreign-log entry must not verify as included")
 	}
 
-	// Truncated links.
-	trunc := Proof{Prior: proofs5[0].Prior, Links: proofs5[0].Links[:len(proofs5[0].Links)-1]}
+	// Truncated audit path.
+	trunc := Proof{Seq: proofs5[0].Seq, Path: proofs5[0].Path[:len(proofs5[0].Path)-1]}
 	if VerifyInclusion(entries[0], trunc, cp5, op.pub) {
-		t.Fatal("a truncated Links slice must not verify")
+		t.Fatal("a truncated audit path must not verify")
 	}
 
-	// Wrong prior.
-	wrongPrior := proofs5[1]
-	wrongPrior.Prior[0] ^= 1
-	if VerifyInclusion(entries[1], wrongPrior, cp5, op.pub) {
-		t.Fatal("a wrong Prior must not verify")
+	// Tampered sibling hash.
+	tampered := Proof{Seq: proofs5[1].Seq, Path: append([]Hash(nil), proofs5[1].Path...)}
+	tampered.Path[0][0] ^= 1
+	if VerifyInclusion(entries[1], tampered, cp5, op.pub) {
+		t.Fatal("a tampered audit path must not verify")
+	}
+
+	// Wrong claimed position.
+	misplaced := Proof{Seq: proofs5[1].Seq + 1, Path: proofs5[1].Path}
+	if VerifyInclusion(entries[1], misplaced, cp5, op.pub) {
+		t.Fatal("a proof at the wrong position must not verify")
 	}
 
 	// Wrong operator key.
@@ -408,25 +419,24 @@ func TestConsistency(t *testing.T) {
 	}
 	cp5 := sign(l.Checkpoint(testInstant))
 
-	links, err := l.LeavesSince(2)
+	links, err := l.ProveConsistency(2)
 	if err != nil {
-		t.Fatalf("LeavesSince(2): %v", err)
+		t.Fatalf("ProveConsistency(2): %v", err)
 	}
 	if !VerifyConsistency(cp2, cp5, links, op.pub) {
 		t.Fatal("honest extension from size 2 to 5 must verify")
 	}
-	all, err := l.LeavesSince(0)
-	if err != nil {
-		t.Fatalf("LeavesSince(0): %v", err)
+	if !VerifyConsistency(cp0, cp5, nil, op.pub) {
+		t.Fatal("consistency from the empty-log checkpoint needs no proof")
 	}
-	if !VerifyConsistency(cp0, cp5, all, op.pub) {
-		t.Fatal("consistency from the empty-log checkpoint must accept the full leaf sequence")
+	if VerifyConsistency(cp0, cp5, links, op.pub) {
+		t.Fatal("a non-empty proof against the empty-log checkpoint must not verify")
 	}
 	if VerifyConsistency(cp5, cp2, nil, op.pub) {
 		t.Fatal("newer.Size < older.Size must never verify")
 	}
 	if VerifyConsistency(cp5, cp2, links, op.pub) {
-		t.Fatal("newer.Size < older.Size must never verify regardless of links")
+		t.Fatal("newer.Size < older.Size must never verify regardless of proof")
 	}
 
 	// Fork: the operator rewrites entry 1 (inside cp2's history) and
@@ -446,31 +456,26 @@ func TestConsistency(t *testing.T) {
 		}
 	}
 	cpFork5 := sign(lf.Checkpoint(testInstant))
-	forkSince2, err := lf.LeavesSince(2)
+	forkSince2, err := lf.ProveConsistency(2)
 	if err != nil {
-		t.Fatalf("LeavesSince: %v", err)
+		t.Fatalf("ProveConsistency: %v", err)
+	}
+	garbage := make([]Hash, len(links))
+	for i := range garbage {
+		garbage[i] = HashContent([]byte{byte(200 + i)})
 	}
 	for name, candidate := range map[string][]Hash{
-		"fork LeavesSince(2)":   forkSince2,
-		"honest LeavesSince(2)": links,
-		"empty":                 nil,
-		"full fork leaves":      mustLeaves(t, lf, 0),
+		"fork ProveConsistency(2)":   forkSince2,
+		"honest ProveConsistency(2)": links,
+		"empty":                      nil,
+		"garbage hashes":             garbage,
 	} {
 		if VerifyConsistency(cp2, cpFork5, candidate, op.pub) {
-			t.Fatalf("fork rewriting checkpointed history must fail VerifyConsistency (links: %s)", name)
+			t.Fatalf("fork rewriting checkpointed history must fail VerifyConsistency (proof: %s)", name)
 		}
 	}
 	// Same-size fork against the honest size-5 checkpoint.
 	if VerifyConsistency(cp5, cpFork5, nil, op.pub) {
 		t.Fatal("a same-size fork must fail VerifyConsistency")
 	}
-}
-
-func mustLeaves(t *testing.T, l *Log, since uint64) []Hash {
-	t.Helper()
-	leaves, err := l.LeavesSince(since)
-	if err != nil {
-		t.Fatalf("LeavesSince(%d): %v", since, err)
-	}
-	return leaves
 }

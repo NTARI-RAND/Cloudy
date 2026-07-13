@@ -1,7 +1,7 @@
 // Package record is Drops — Cloudy's dialog-sealed, append-only, witnessed
 // record: the durable account of what two members agreed to, kept as
-// per-operator hash-chained logs whose integrity any member can verify
-// offline. Drops is the product name (and the domain-tag namespace, drops/*);
+// per-operator Merkle-tree logs (RFC 6962 shape) whose integrity any member
+// can verify offline with logarithmic-size proofs. Drops is the product name (and the domain-tag namespace, drops/*);
 // record stays the Go package name per the 2026-07-09 naming decision. It is a
 // JFA member-economy layer the substrate coordination protocol does not
 // define, and the member-facing analogue of the protocol's anchor/ package:
@@ -55,21 +55,21 @@
 // is an ordinary new Entry whose Corrects field references the entry it
 // corrects while removing nothing. Runtime second: OpenLog replays and
 // cryptographically re-verifies the entire store (seals, log binding,
-// corrections, duplicates, chain fold), rejecting invalid, foreign,
-// duplicate, and dangling-correction entries — but the ORDER of independent
-// un-checkpointed entries is NOT fixed by replay alone: a store with two
-// such entries swapped replays cleanly to a different head. That order is
-// protected by the next rung, and the gap is exactly CT's residual. Append
-// rejects a nonzero Corrects that names no in-log entry. Detectable third:
-// operator-signed monotonic Checkpoints plus
+// corrections, duplicates) and rebuilds the Merkle tree, rejecting invalid,
+// foreign, duplicate, and dangling-correction entries — but the ORDER of
+// independent un-checkpointed entries is NOT fixed by replay alone: a store
+// with two such entries swapped replays cleanly to a different head. That
+// order is protected by the next rung, and the gap is exactly CT's residual.
+// Append rejects a nonzero Corrects that names no in-log entry. Detectable
+// third: operator-signed monotonic Checkpoints plus
 // VerifyConsistency make any rewrite of checkpointed history
 // cryptographically visible to anyone holding an older checkpoint; the
 // checkpoint pair is itself portable fork evidence.
 //
 // The record MUST NOT be a single global ledger over unrelated exchanges.
 // Structural: a Log is constructed from exactly one operator key, and its
-// derived identity LogID(operator) seeds the chain fold, so every position
-// is scoped to one log. Each Entry carries its LogID INSIDE the dual-signed
+// derived identity LogID(operator) is the empty log's head and the scope of
+// every checkpoint, so every position is scoped to one log. Each Entry carries its LogID INSIDE the dual-signed
 // bytes, so a sealed covenant can never migrate or be replayed into another
 // operator's log, and Checkpoint.Verify binds cp.Log == LogID(operator) so
 // commitments cannot be replayed either. The package exports no merge, no
@@ -110,27 +110,29 @@
 // agreements distinct and makes double-appends detectable.
 //
 // Signing bytes are canonical, domain-separated, and UTC. All signing and
-// hashing payloads are built with the protocol's canon package under the six
-// distinct tags below; canon.Time normalizes every signed instant to UTC
-// nanoseconds and drops monotonic and location components.
+// hashing payloads are built with the protocol's canon package under the
+// seven distinct tags below; canon.Time normalizes every signed instant to
+// UTC nanoseconds and drops monotonic and location components.
 //
 // # Domain tags
 //
 // Every hash and signature in the package is computed over canonical bytes
-// beginning with one of six distinct, unexported domain tags:
+// beginning with one of seven distinct, unexported domain tags:
 //
 //	drops/content/v0     HashContent digests
 //	drops/entry/v0       Entry signing payloads (both seals)
 //	drops/leaf/v0        Entry.ID leaf hashes
-//	drops/chain/v0       the chain derivation: LogID seed and fold steps
-//	drops/checkpoint/v0  Checkpoint signing payloads
-//	drops/witness/v0     witness countersignature payloads
+//	drops/logid/v1       LogID derivation (the empty log's head)
+//	drops/node/v1        interior Merkle tree nodes
+//	drops/checkpoint/v1  Checkpoint signing payloads
+//	drops/witness/v1     witness countersignature payloads
 //
 // so no artifact is transferable between message types, between a hash role
-// and a signature role, or back into sohocloud-protocol messages. The chain
-// tag covers the two arities of the one chain derivation — the single-field
-// seed (LogID over the operator key) and the two-field fold step — which
-// canon's length prefixes keep disjoint.
+// and a signature role, or back into sohocloud-protocol messages. Leaves and
+// interior nodes carry different tags — the RFC 6962 0x00/0x01 discipline in
+// canon form — so a leaf can never be replayed as a node or vice versa. The
+// v1 tags mark the 2026-07-12 Merkle decision (proof shape settled before
+// any durable log existed); the v0 chain tag is retired, not reused.
 //
 // # Named residuals
 //
