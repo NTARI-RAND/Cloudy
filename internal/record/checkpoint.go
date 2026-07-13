@@ -41,11 +41,21 @@ func (c *Checkpoint) Sign(priv ed25519.PrivateKey) {
 }
 
 // Verify reports whether Signature is a valid operator signature AND
-// c.Log == LogID(operator), so a checkpoint can never be replayed against
-// another operator's log.
+// c.Log == LogID(operator) — the operator's DIALOG log. A checkpoint can
+// never be replayed against another operator's log, and (because the
+// lifecycle log has a domain-distinct identity) never against the same
+// operator's lifecycle log either.
 func (c Checkpoint) Verify(operator ed25519.PublicKey) bool {
-	return len(operator) == ed25519.PublicKeySize &&
+	return c.VerifyAs(operator, LogID(operator))
+}
+
+// VerifyAs reports whether Signature is a valid signature by signer AND
+// c.Log equals the expected log identity — the generic binding used for the
+// lifecycle log (VerifyAs(operator, LifecycleLogID(operator))) and any
+// future per-operator log kind.
+func (c Checkpoint) VerifyAs(signer ed25519.PublicKey, wantLog Hash) bool {
+	return len(signer) == ed25519.PublicKeySize &&
 		len(c.Signature) == ed25519.SignatureSize &&
-		c.Log == LogID(operator) &&
-		ed25519.Verify(operator, c.CanonicalBytes(), c.Signature)
+		c.Log == wantLog &&
+		ed25519.Verify(signer, c.CanonicalBytes(), c.Signature)
 }

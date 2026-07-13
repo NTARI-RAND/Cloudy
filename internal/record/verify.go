@@ -46,7 +46,13 @@ func VerifyInclusion(e Entry, p Proof, cp Checkpoint, operator ed25519.PublicKey
 // The empty older log (Size 0) is consistent with anything on an empty
 // proof; equal sizes are consistent only when the heads are equal.
 func VerifyConsistency(older, newer Checkpoint, proof []Hash, operator ed25519.PublicKey) bool {
-	if !older.Verify(operator) || !newer.Verify(operator) {
+	return VerifyConsistencyAs(older, newer, proof, operator, LogID(operator))
+}
+
+// VerifyConsistencyAs is VerifyConsistency with an explicit log identity —
+// used for the lifecycle log and any future per-operator log kind.
+func VerifyConsistencyAs(older, newer Checkpoint, proof []Hash, signer ed25519.PublicKey, wantLog Hash) bool {
+	if !older.VerifyAs(signer, wantLog) || !newer.VerifyAs(signer, wantLog) {
 		return false
 	}
 	if older.Log != newer.Log {

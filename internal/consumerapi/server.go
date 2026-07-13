@@ -89,6 +89,17 @@ type Server struct {
 	ecoStore *economy.MemStore
 	registry *dispute.Registry
 
+	// The claim-lifecycle log (Part IV): every dispute transition commits
+	// here as it happens, checkpointed and witnessable exactly like the
+	// dialog log. The filing intake is the ONE witness write; in this
+	// process it is operator-run, so every receipt it issues is honestly
+	// labeled non-independent — the stand-in until the witness relay and
+	// real independent intake witnesses exist (Phase 3).
+	lifeLog   *record.LifecycleLog
+	lifeStore *record.MemTransitionStore
+	lifeID    record.Hash
+	intake    *record.FilingIntake
+
 	// manifest maps a commons artifact id (hex) to the Locker hashes of its
 	// member-local narrative — the front-end-local index that lets a reader
 	// fetch narrative the commons deliberately does not carry.
@@ -261,6 +272,13 @@ func NewServer(platform string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.lifeStore = record.NewMemTransitionStore()
+	s.lifeLog, err = record.OpenLifecycleLog(operatorPub, s.lifeStore)
+	if err != nil {
+		return nil, err
+	}
+	s.lifeID = record.LifecycleLogID(operatorPub)
+	s.intake = record.NewFilingIntake(operatorPriv)
 	return s, nil
 }
 
@@ -288,6 +306,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/disputes", s.handleOpenDispute)
 	mux.HandleFunc("GET /api/v1/disputes/{id}", s.handleGetDispute)
 	mux.HandleFunc("POST /api/v1/disputes/{id}/withdraw", s.handleWithdrawDispute)
+	mux.HandleFunc("GET /api/v1/lifecycle/checkpoints", s.handleLifecycleCheckpoints)
+	mux.HandleFunc("GET /api/v1/drops/checkpoints/consistency", s.handleDropsConsistency)
+	mux.HandleFunc("GET /api/v1/lifecycle/checkpoints/consistency", s.handleLifecycleConsistency)
+	mux.HandleFunc("GET /api/v1/lifecycle/claims/{id}", s.handleLifecycleClaim)
+	mux.HandleFunc("GET /api/v1/drops/{id}/proof", s.handleDropProof)
 	return mux
 }
 

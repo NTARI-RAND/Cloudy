@@ -1,10 +1,13 @@
 package consumerapi
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/NTARI-RAND/Cloudy/internal/dispute"
+	"github.com/NTARI-RAND/Cloudy/internal/record"
 )
 
 type openDisputeRequest struct {
@@ -15,6 +18,28 @@ type openDisputeRequest struct {
 	Nonce       string `json:"nonce"`       // hex 32-byte client-drawn nonce
 	OpenedAt    string `json:"opened_at"`
 	Signature   string `json:"signature"` // hex ed25519 by the complainant
+
+	// Filing is the complainant-signed FilingCommitment over the claim this
+	// opening will create: the structural fact lodged at the intake witness
+	// BEFORE the operator acts. Its fields commit to a hash, a type, a
+	// timestamp, and an exchange reference — never narrative or identity.
+	Filing struct {
+		TypeHash  string `json:"type_hash"` // hex digest of the dispute-type label
+		At        string `json:"at"`
+		Signature string `json:"signature"` // hex ed25519 by the complainant over the commitment
+	} `json:"filing"`
+}
+
+type filingReceiptView struct {
+	Witness    string `json:"witness"`
+	ReceivedAt string `json:"received_at"`
+	Signature  string `json:"signature"`
+	// Independent is false whenever the intake witness is the operator —
+	// this process's permanent condition until real independent intake
+	// witnesses exist. False here means: the operator was NOT absent from
+	// this claim's birth, and the receipt proves intake ordering only
+	// against the operator's own honesty. Label, not decoration.
+	Independent bool `json:"independent"`
 }
 
 // handleOpenDispute admits one complainant-signed Opening. The Registry is
@@ -71,6 +96,22 @@ func (s *Server) handleOpenDispute(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "signature must be a 64-byte hex signature")
 		return
 	}
+	typeHash, ok := decodeHex32(req.Filing.TypeHash)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "filing.type_hash must be a 32-byte hex digest")
+		return
+	}
+	filedAt, ok := parseUTC(req.Filing.At)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "filing.at must be RFC3339")
+		return
+	}
+	filingSig, ok := decodeSig(req.Filing.Signature)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "filing.signature must be a 64-byte hex signature")
+		return
+	}
+
 	o := dispute.Opening{
 		Platform:    s.platform,
 		Complainant: complainant,
@@ -81,14 +122,52 @@ func (s *Server) handleOpenDispute(w http.ResponseWriter, r *http.Request) {
 		OpenedAt:    openedAt,
 		Signature:   sig,
 	}
+	claimID := o.ID()
+
+	// Intake FIRST: the filing commitment is acknowledged before the
+	// operator's registry acts on the opening — the Part-IV ordering, kept
+	// even while both roles run in one process.
+	commitment := record.FilingCommitment{
+		Claim:     record.Hash(claimID),
+		Exchange:  record.Hash(exchange),
+		TypeHash:  record.Hash(typeHash),
+		At:        filedAt,
+		Filer:     complainant,
+		Signature: filingSig,
+	}
+	receipt, err := s.intake.Accept(commitment, time.Now().UTC())
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "filing commitment refused: "+err.Error())
+		return
+	}
+
 	s.mu.Lock()
 	id, err := s.registry.Open(o)
+	if err == nil {
+		artifact := sha256.Sum256(o.CanonicalBytes())
+		_, err = s.lifeLog.Append(record.Transition{
+			Log:      s.lifeID,
+			Claim:    record.Hash(id),
+			Kind:     record.KindFiled,
+			Artifact: record.Hash(artifact),
+			Exchange: record.Hash(exchange),
+			At:       time.Now().UTC(),
+		})
+	}
 	s.mu.Unlock()
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"dispute_id": hx(id[:])})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"dispute_id": hx(id[:]),
+		"filing_receipt": filingReceiptView{
+			Witness:     hx(receipt.Witness),
+			ReceivedAt:  receipt.ReceivedAt.UTC().Format(time.RFC3339Nano),
+			Signature:   hx(receipt.Signature),
+			Independent: receipt.IndependentOf(s.operatorPub),
+		},
+	})
 }
 
 type disputeView struct {
@@ -163,6 +242,22 @@ func (s *Server) handleWithdrawDispute(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	err := s.registry.Withdraw(wd)
+	if err == nil {
+		var c dispute.Case
+		c, cerr := s.registry.Case(dispute.DisputeID(id))
+		if cerr == nil {
+			exchange := c.Exchange()
+			artifact := sha256.Sum256(wd.CanonicalBytes())
+			_, err = s.lifeLog.Append(record.Transition{
+				Log:      s.lifeID,
+				Claim:    record.Hash(id),
+				Kind:     record.KindResolved,
+				Artifact: record.Hash(artifact),
+				Exchange: record.Hash(exchange),
+				At:       time.Now().UTC(),
+			})
+		}
+	}
 	s.mu.Unlock()
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
