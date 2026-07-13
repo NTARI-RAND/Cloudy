@@ -69,11 +69,19 @@ type distributionDTO struct {
 	Total  int            `json:"total"`
 }
 
-type standingResponse struct {
-	MemberID   string                     `json:"member_id"`
+type relationStandingDTO struct {
 	Overall    distributionDTO            `json:"overall"`
 	ByCategory map[string]distributionDTO `json:"by_category"`
 	Harm       int                        `json:"harm"` // count of No Trust (-1); surfaced by name, never diluted
+}
+
+type standingResponse struct {
+	MemberID string `json:"member_id"`
+	// Relations types the standing: trade, adjudication-conduct, and
+	// verdict-satisfaction are different relations with different base
+	// rates, and this response deliberately provides NO cross-relation pool
+	// — collapsing them would be the average committed across relations.
+	Relations map[string]relationStandingDTO `json:"relations"`
 }
 
 func distToDTO(d covenant.Distribution) distributionDTO {
@@ -100,15 +108,22 @@ func (s *Server) handleStanding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	byCat := map[string]distributionDTO{}
-	for _, name := range categories {
-		byCat[name] = distToDTO(standing.Category(name))
+	relations := map[string]relationStandingDTO{}
+	for _, rel := range covenant.Relations() {
+		rs := standing.Relation(rel)
+		byCat := map[string]distributionDTO{}
+		for _, name := range categories {
+			byCat[name] = distToDTO(rs.Category(name))
+		}
+		relations[string(rel)] = relationStandingDTO{
+			Overall:    distToDTO(rs.Overall()),
+			ByCategory: byCat,
+			Harm:       rs.Harm(),
+		}
 	}
 	writeJSON(w, http.StatusOK, standingResponse{
-		MemberID:   string(member),
-		Overall:    distToDTO(standing.Overall()),
-		ByCategory: byCat,
-		Harm:       standing.Harm(),
+		MemberID:  string(member),
+		Relations: relations,
 	})
 }
 

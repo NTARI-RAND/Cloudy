@@ -144,6 +144,7 @@ func (s *Server) handleOpenDispute(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	id, err := s.registry.Open(o)
 	if err == nil {
+		s.disputesByExchange[record.Hash(exchange)] = append(s.disputesByExchange[record.Hash(exchange)], id)
 		artifact := sha256.Sum256(o.CanonicalBytes())
 		_, err = s.lifeLog.Append(record.Transition{
 			Log:      s.lifeID,

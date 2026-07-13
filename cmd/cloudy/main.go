@@ -122,6 +122,13 @@ func (a *recordAnchors) Sealed(exchange covenant.ExchangeRef, assessor, subject 
 		(bytes.Equal(e.Proposer, subjectKey) && bytes.Equal(e.Acceptor, assessorKey))
 }
 
+// Adjudicated implements the adjudication-relation anchor. The headless
+// composition root has no dispute ingress and no adjudicator, so nothing is
+// ever adjudicated here; the honest answer is the constant one.
+func (a *recordAnchors) Adjudicated(covenant.ExchangeRef, covenant.MemberID, covenant.MemberID) bool {
+	return false
+}
+
 // disputeAnchors implements dispute.Anchors, the dispute-side twin of
 // recordAnchors: the same join to the operator's record log on Entry.ID(), but
 // the dispute port speaks raw ed25519 public keys (not covenant MemberIDs), so

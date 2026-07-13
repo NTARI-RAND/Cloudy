@@ -197,8 +197,10 @@ func TestFullFlow(t *testing.T) {
 	if srec.Code != http.StatusOK {
 		t.Fatalf("standing: %d %s", srec.Code, srec.Body.String())
 	}
-	if sout["harm"].(float64) != 0 {
-		t.Fatalf("fresh member harm = %v, want 0", sout["harm"])
+	for rel, v := range sout["relations"].(map[string]any) {
+		if v.(map[string]any)["harm"].(float64) != 0 {
+			t.Fatalf("fresh member harm (%s) = %v, want 0", rel, v.(map[string]any)["harm"])
+		}
 	}
 }
 
