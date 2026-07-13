@@ -84,17 +84,24 @@ func (w *Witness) Key() ed25519.PublicKey {
 // rewritten head is the one thing a witness exists to never do, and here it
 // is enforced, not advised.
 func (w *Witness) Countersign(cp Checkpoint, operator ed25519.PublicKey, consistencyProof []Hash) (Countersignature, error) {
+	return w.CountersignAs(cp, operator, LogID(operator), consistencyProof)
+}
+
+// CountersignAs is Countersign with an explicit log identity, so the same
+// witness (and the same per-log rollback memory, keyed by log identity)
+// serves dialog logs and lifecycle logs alike.
+func (w *Witness) CountersignAs(cp Checkpoint, operator ed25519.PublicKey, wantLog Hash, consistencyProof []Hash) (Countersignature, error) {
 	if len(w.priv) != ed25519.PrivateKeySize {
 		return Countersignature{}, errors.New("record: witness key is malformed")
 	}
 	if bytes.Equal(operator, w.pub) {
 		return Countersignature{}, errors.New("record: a witness never countersigns its own operator")
 	}
-	if !cp.Verify(operator) {
-		return Countersignature{}, errors.New("record: checkpoint does not verify under operator")
+	if !cp.VerifyAs(operator, wantLog) {
+		return Countersignature{}, errors.New("record: checkpoint does not verify under operator for this log")
 	}
 	if prev, seen := w.last[cp.Log]; seen {
-		if !VerifyConsistency(prev, cp, consistencyProof, operator) {
+		if !VerifyConsistencyAs(prev, cp, consistencyProof, operator, wantLog) {
 			return Countersignature{}, errors.New("record: checkpoint is not a consistent extension of the last cosigned checkpoint (rollback or fork refused)")
 		}
 	}

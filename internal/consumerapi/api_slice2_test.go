@@ -282,7 +282,19 @@ func TestDisputeFileWithdrawLifecycle(t *testing.T) {
 	if err := o.Sign(privA); err != nil {
 		t.Fatal(err)
 	}
-	rec, body := do(t, h, "POST", "/api/v1/disputes", openDisputeRequest{
+	// The filing commitment is signed CLIENT-side over the claim the opening
+	// will create, and lodged at the intake before the registry acts.
+	wantID := o.ID()
+	typeHash := sha256.Sum256([]byte("trade-harm"))
+	commitment := record.FilingCommitment{
+		Claim:    record.Hash(wantID),
+		Exchange: record.Hash(ex),
+		TypeHash: record.Hash(typeHash),
+		At:       o.OpenedAt,
+		Filer:    pubA,
+	}
+	commitment.Sign(privA)
+	req := openDisputeRequest{
 		Complainant: hex.EncodeToString(pubA),
 		Respondent:  hex.EncodeToString(pubB),
 		Exchange:    id,
@@ -290,14 +302,32 @@ func TestDisputeFileWithdrawLifecycle(t *testing.T) {
 		Nonce:       hex.EncodeToString(o.Nonce[:]),
 		OpenedAt:    o.OpenedAt.Format(time.RFC3339Nano),
 		Signature:   hex.EncodeToString(o.Signature),
-	})
+	}
+	req.Filing.TypeHash = hex.EncodeToString(typeHash[:])
+	req.Filing.At = o.OpenedAt.Format(time.RFC3339Nano)
+	req.Filing.Signature = hex.EncodeToString(commitment.Signature)
+	rec, body := do(t, h, "POST", "/api/v1/disputes", req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("open dispute: code %d body %s", rec.Code, rec.Body.String())
 	}
 	dID, _ := body["dispute_id"].(string)
-	wantID := o.ID()
 	if dID != hex.EncodeToString(wantID[:]) {
 		t.Fatalf("dispute_id %q, want Opening.ID() %q", dID, hex.EncodeToString(wantID[:]))
+	}
+	// The receipt is present and HONESTLY labeled: the intake runs in the
+	// operator's process, so it must say independent=false.
+	receipt, _ := body["filing_receipt"].(map[string]any)
+	if receipt == nil {
+		t.Fatal("open dispute must return the filing receipt")
+	}
+	if receipt["independent"] != false {
+		t.Fatal("an operator-run intake must label its receipts non-independent")
+	}
+
+	// The lifecycle log shows the claim filed, as it happened.
+	rec, body = do(t, h, "GET", "/api/v1/lifecycle/claims/"+dID, nil)
+	if rec.Code != http.StatusOK || body["state"] != "filed" {
+		t.Fatalf("lifecycle claim after open: code %d state %v, want filed", rec.Code, body["state"])
 	}
 
 	rec, body = do(t, h, "GET", "/api/v1/disputes/"+dID, nil)
@@ -329,9 +359,99 @@ func TestDisputeFileWithdrawLifecycle(t *testing.T) {
 		t.Fatalf("case after withdrawal: code %d state %v, want withdrawn", rec.Code, body["state"])
 	}
 
+	// The lifecycle log recorded the resolution as its own transition, and
+	// the lifecycle checkpoint (stand-in labeled) covers both transitions.
+	rec, body = do(t, h, "GET", "/api/v1/lifecycle/claims/"+dID, nil)
+	if rec.Code != http.StatusOK || body["state"] != "resolved" {
+		t.Fatalf("lifecycle claim after withdrawal: code %d state %v, want resolved", rec.Code, body["state"])
+	}
+	if n := len(body["transitions"].([]any)); n != 2 {
+		t.Fatalf("lifecycle transitions = %d, want 2 (filed, resolved)", n)
+	}
+	rec, body = do(t, h, "GET", "/api/v1/lifecycle/checkpoints", nil)
+	if rec.Code != http.StatusOK || body["stand_in"] != true || body["size"].(float64) != 2 {
+		t.Fatalf("lifecycle checkpoint: code %d body %v, want stand_in=true size=2", rec.Code, body)
+	}
+
 	unknown := sha256.Sum256([]byte("no such case"))
 	rec, _ = do(t, h, "GET", "/api/v1/disputes/"+hex.EncodeToString(unknown[:]), nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown dispute: code %d, want 404", rec.Code)
+	}
+}
+
+// TestDropProofVerifiesOffline drives the full member-verification story:
+// seal a dialog, fetch its proof and checkpoint, and verify inclusion with
+// nothing but the record package's public verifier — no operator trust.
+func TestDropProofVerifiesOffline(t *testing.T) {
+	h := newTestServer(t)
+	pubA, privA := key(1)
+	pubB, privB := key(2)
+	registerMember(t, h, pubA, privA)
+	registerMember(t, h, pubB, privB)
+
+	// Seal via the API, keeping the client-side entry for verification.
+	rec, body := do(t, h, "GET", "/api/v1/drops/log", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("drops/log: %d", rec.Code)
+	}
+	logRaw, _ := hex.DecodeString(body["log_id"].(string))
+	opKeyRaw, _ := hex.DecodeString(body["operator_key"].(string))
+	var logID record.Hash
+	copy(logID[:], logRaw)
+	e, err := record.NewEntry(logID, pubA, pubB, record.HashContent([]byte("n")), record.Hash{}, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = e.Seal(privA)
+	_ = e.Seal(privB)
+	rec, body = do(t, h, "POST", "/api/v1/drops", dropRequest{
+		Log:          body["log_id"].(string),
+		Proposer:     hex.EncodeToString(pubA),
+		Acceptor:     hex.EncodeToString(pubB),
+		Content:      hex.EncodeToString(e.Content[:]),
+		Nonce:        hex.EncodeToString(e.Nonce[:]),
+		SealedAt:     e.SealedAt.Format(time.RFC3339Nano),
+		ProposerSeal: hex.EncodeToString(e.ProposerSeal),
+		AcceptorSeal: hex.EncodeToString(e.AcceptorSeal),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST drops: %d %s", rec.Code, rec.Body.String())
+	}
+	id := body["id"].(string)
+
+	rec, body = do(t, h, "GET", "/api/v1/drops/"+id+"/proof", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("proof: %d %s", rec.Code, rec.Body.String())
+	}
+	var p record.Proof
+	p.Seq = uint64(body["seq"].(float64))
+	for _, hstr := range body["path"].([]any) {
+		raw, _ := hex.DecodeString(hstr.(string))
+		var hh record.Hash
+		copy(hh[:], raw)
+		p.Path = append(p.Path, hh)
+	}
+	cpBody := body["checkpoint"].(map[string]any)
+	var cp record.Checkpoint
+	lr, _ := hex.DecodeString(cpBody["log"].(string))
+	hr, _ := hex.DecodeString(cpBody["head"].(string))
+	copy(cp.Log[:], lr)
+	copy(cp.Head[:], hr)
+	cp.Size = uint64(cpBody["size"].(float64))
+	cp.IssuedAt, err = time.Parse(time.RFC3339Nano, cpBody["issued_at"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp.Signature, _ = hex.DecodeString(cpBody["signature"].(string))
+
+	if !record.VerifyInclusion(e, p, cp, ed25519.PublicKey(opKeyRaw)) {
+		t.Fatal("the served proof must verify offline against the served checkpoint and operator key")
+	}
+	// And the tamper story holds end to end.
+	bad := e
+	bad.Content[0] ^= 1
+	if record.VerifyInclusion(bad, p, cp, ed25519.PublicKey(opKeyRaw)) {
+		t.Fatal("a tampered entry must not verify")
 	}
 }
