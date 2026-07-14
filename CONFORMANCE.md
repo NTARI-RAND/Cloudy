@@ -14,6 +14,7 @@ Cloudy is a **front end** of a JFA substrate — the member-facing application �
 | `internal/covenant` | the **assessment scale** implementation (member reputation as covenant) |
 | `internal/economy` | **member-issued credit** (the member economy) |
 | `internal/coord` | consumption of the substrate **coordination protocol** |
+| `internal/enroll` | **frontend-as-operator enrollment** with a coordinator (apply → keys → verify → conformance → active) |
 | Member | a person, platform-scoped; PII stays member-local and erasable |
 
 ## Invariants and their bindings — as of `main`
@@ -38,6 +39,7 @@ Statuses are stated per the architecture's honesty rule. Built member-layer work
 - **Record domain-tag rename** (product naming) is pending and must land **before any durable persistence** — retagging after durable logs exist would be a rewrite.
 - **Named record residuals** (steganographic floor, timestamp covert channel, witness amnesia, liveness gap) are documented in the record package doc rather than pretended away.
 - **Contributor node — Executor seam built; runtime implementations pending.** `internal/contribute` fixes the node-contribution contract (Executor / ServiceExecutor / Registry / NodeContract) with two invariants enforced by tests: a scavenged node accepts only preemptible executors (owner-never-interrupted), and a Service workload requires pinned placement. `cmd/cloudy-agent` runs it end to end with a **real** Storage executor (opaque sealed shards + the `internal/storage` proof-of-possession) and **placeholder** Compute/Service executors. The heavy runtime port from the coordinator's transitional `internal/agent` — Docker executor, gopsutil hardware sampling, opt-out/allowlist/printers, and the agent→cloudyd→`/v0` relay — is the named next step and lands *behind* this seam without changing it.
+- **Operator enrollment driver — built and live-verified.** `internal/enroll` + `cmd/cloudy-enroll` drive a coordinator's operator onboarding lifecycle end to end (apply → register the 7-key set → email verification → conformance suites A/B → automatic activation), reusing `internal/opcred` for key custody and for computing conformance answers through the real protocol canon. Suite C is graded coordinator-side and needs no operator response, so there is no suite-C step. The client is deliberately separate from `internal/coord`: enrollment is plain JSON on the coordinator's **portal** surface, not the `/v0` node-side wire. The out-of-band email code is supplied via an injected `CodeSource`. Verified against a live SoHoLINK coordinator — the enrolled operator reached `active` and its credential then authenticated on `/v0`.
 
 ## Dependency declaration
 
