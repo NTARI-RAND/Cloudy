@@ -34,3 +34,38 @@ func Dial(baseURL string) *Client {
 		},
 	}
 }
+
+// DialAsOperator returns a client that authenticates every request as an
+// operator: decorate mutates each outgoing request, typically setting
+// opcred.OperatorHeaderName to a freshly signed+encoded operator transmission
+// (the coordinator's /v0 operator-auth seam). The credential wiring lives at
+// the caller, so this package stays free of the opcred/protocol operator
+// packages and models no policy.
+func DialAsOperator(baseURL string, decorate func(*http.Request) error) *Client {
+	return &Client{
+		Coordinator: &httpjson.Client{
+			BaseURL: baseURL,
+			HTTP: &http.Client{
+				Timeout:   30 * time.Second,
+				Transport: &operatorRoundTripper{base: http.DefaultTransport, decorate: decorate},
+			},
+		},
+	}
+}
+
+// operatorRoundTripper attaches per-request operator authentication before
+// delegating to the base transport. It clones the request (a RoundTripper must
+// not mutate its argument) and is fail-closed: if decoration fails the request
+// is never sent, so a request can never go out unauthenticated.
+type operatorRoundTripper struct {
+	base     http.RoundTripper
+	decorate func(*http.Request) error
+}
+
+func (t *operatorRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	r2 := req.Clone(req.Context())
+	if err := t.decorate(r2); err != nil {
+		return nil, err
+	}
+	return t.base.RoundTrip(r2)
+}
