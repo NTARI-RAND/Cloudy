@@ -32,6 +32,15 @@ Statuses are stated per the architecture's honesty rule. Built member-layer work
 | **Single participant identity** — one member, simultaneously contributor and consumer | Design-binding | No producer/consumer split exists in any schema or type; binds every member surface as it lands |
 | **Forkability** | Built | Consumes the coordination protocol at a published version tag; no coordinator is privileged |
 
+## JFA registry bindings
+
+Tests that bind an ID from the Janus invariant registry (`jfa-conformance-suite.py` in NTARI-RAND/Janus) are named `TestInvariant_<ID>_<Name>`, with any `-` in the ID written `_` (so `REC-six-holders` becomes `TestInvariant_REC_six_holders_…`). `go test -run TestInvariant_ -v ./...` lists every binding and its result.
+
+| Registry ID | Test | What it adds beyond the package's existing tests |
+|---|---|---|
+| **L1** — each exchange moves two balances netting to zero | `internal/economy` `TestInvariant_L1_ZeroSumBalance` | Concurrent payers across two ledgers sharing one store; per-record netting; replay reproduces every balance |
+| **L8** — full distribution carried; no scalar score anywhere | `internal/covenant` `TestInvariant_L8_NoScalarAggregation` | Two members with equal means and different shapes stay distinguishable; a module-wide source scan for score-named or float-returning exported functions, score-like JSON tags, and float fields in reputation packages |
+
 ## Stand-ins and open residuals
 
 - **Single-witness StandIn.** Every witnessed checkpoint today has fewer than two independent witnesses; the record layer computes and reports this label structurally. Live federation is the architecture's open problem 2 — the keystone build.
