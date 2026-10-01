@@ -40,6 +40,8 @@ Tests that bind an ID from the Janus invariant registry (`jfa-conformance-suite.
 |---|---|---|
 | **L1** — each exchange moves two balances netting to zero | `internal/economy` `TestInvariant_L1_ZeroSumBalance` | Concurrent payers across two ledgers sharing one store; per-record netting; replay reproduces every balance |
 | **L8** — full distribution carried; no scalar score anywhere | `internal/covenant` `TestInvariant_L8_NoScalarAggregation` | Two members with equal means and different shapes stay distinguishable; a module-wide source scan for score-named or float-returning exported functions, score-like JSON tags, and float fields in reputation packages |
+| **L6** — no update-in-place, no delete; dismissal is annotation | `internal/record` `TestInvariant_L6_AppendOnly` (dismissal half: `internal/covenant` `TestAnswersCloseTheSymmetryBreach`) | A correction appends and leaves the corrected entry and all earlier proofs intact; an in-place rewrite done directly on storage fails consistency against a checkpoint taken before it; a module-wide source scan finds no update or delete verb on any store, log, ledger, or book |
+| **L7** — commons holds hashes, types, timestamps, references only | `internal/record` `TestInvariant_L7_CommonsSchema` | Every commons type, field by field, admits only byte arrays, length-pinned byte slices, unsigned integers, and `time.Time` — no string, map, interface, or float; seals, keys, and signatures padded with a memo never verify and never enter a log |
 
 ## Stand-ins and open residuals
 
