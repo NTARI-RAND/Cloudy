@@ -325,8 +325,30 @@ func testEconomyImports(t *testing.T) {
 // absent: withdrawing a dispute is not a payment.
 var moneyVerb = regexp.MustCompile(`(^|[a-z0-9])(Buy|Purchase|Redeem|Redemption|CashOut|Cashout|Payout|PayOut|TopUp|Topup|Deposit|Mint|Burn|Convert|Conversion|ExchangeRate|Peg|Bridge|Fiat)([A-Z0-9]|$)`)
 
-// moneyRoute is the same vocabulary in an HTTP route.
-var moneyRoute = regexp.MustCompile(`(?i)(buy|purchase|redeem|redemption|cash-?out|payout|top-?up|deposit|mint|burn|convert|exchange-?rate|peg|bridge)`)
+// moneyRoute is the same vocabulary in an HTTP route path, matched as path
+// words: routePath splits camelCase and turns "_" into "-" first, so
+// "/creditRedeem" and "/cash_out" are caught. Short verbs need a word
+// boundary on both sides, so "peg" in "/img.jpeg" or "buy" in "/buyer"
+// do not match; long verbs only need one on the left, so "/redeemCredit"
+// and "/purchases" do.
+var moneyRoute = regexp.MustCompile(`(^|[^a-z])((buy|mint|burn|peg)([^a-z]|$)|(purchase|redeem|redemption|cash-?out|pay-?out|top-?up|deposit|convert|exchange-?rate|bridge))`)
+
+// routeMethod is an HTTP method prefix on a Go 1.22 mux pattern, e.g.
+// "PATCH " in "PATCH /v0/redeem".
+var routeMethod = regexp.MustCompile(`^[A-Z]+ +`)
+
+var camelBoundary = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+
+// routePath returns the path of a route-like string literal, normalized for
+// moneyRoute, and whether the literal looks like a route at all.
+func routePath(lit string) (string, bool) {
+	p := routeMethod.ReplaceAllString(lit, "")
+	if !strings.HasPrefix(p, "/") {
+		return "", false
+	}
+	p = camelBoundary.ReplaceAllString(p, "$1-$2")
+	return strings.ToLower(strings.ReplaceAll(p, "_", "-")), true
+}
 
 // fiatTouch names the identifiers that mean a function is handling the fiat
 // rail or fiat escrow: market rails, dispute escalations.
@@ -367,8 +389,10 @@ func testL2NoMoneyPath(t *testing.T) {
 					}
 				case *ast.BasicLit:
 					if x.Kind == token.STRING && strings.Contains(x.Value, "/") {
-						if v, err := strconv.Unquote(x.Value); err == nil && strings.HasPrefix(strings.TrimLeft(v, "GETPOSUDLAC "), "/") && moneyRoute.MatchString(v) {
-							t.Errorf("%s: route %q is named like a way to buy credit or cash it out", rel, v)
+						if v, err := strconv.Unquote(x.Value); err == nil {
+							if p, ok := routePath(v); ok && moneyRoute.MatchString(p) {
+								t.Errorf("%s: route %q is named like a way to buy credit or cash it out", rel, v)
+							}
 						}
 					}
 				}
@@ -634,7 +658,7 @@ func testL9StewardsOnly(t *testing.T) {
 
 	// A short quorum (1 of a 2-of-3) is refused.
 	if err := f.ledger.Enact(f.change(raise, 1, 1)); !errors.Is(err, ErrQuorum) {
-		t.Errorf("1-of-2 quorum = %v, want ErrQuorum", err)
+		t.Errorf("1 steward of a 2-of-3 quorum = %v, want ErrQuorum", err)
 	}
 	// Members' signatures count for nothing, however many.
 	c := PolicyChange{Platform: f.genesis.Platform, Policy: raise, Version: 1, At: time.Unix(1700000100, 0).UTC()}
@@ -682,7 +706,7 @@ func testL9NotFromReputation(t *testing.T) {
 	// Anywhere the limit is set — an economy.Policy is built, or a DebitCap
 	// is assigned — the same function must not read covenant standing.
 	root := econModuleRoot(t)
-	setSites := 0
+	setSites := map[string]bool{}
 	econWalkSource(t, root, func(rel string, f *ast.File) {
 		covName := ""
 		for _, imp := range f.Imports {
@@ -702,14 +726,13 @@ func testL9NotFromReputation(t *testing.T) {
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				switch x := n.(type) {
 				case *ast.CompositeLit:
-					if sel, ok := x.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Policy" {
+					// Building an economy.Policy or PolicyChange sets the
+					// limit; a JSON response that merely echoes DebitCap
+					// does not, and is not counted.
+					if sel, ok := x.Type.(*ast.SelectorExpr); ok && (sel.Sel.Name == "Policy" || sel.Sel.Name == "PolicyChange") {
 						if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "economy" {
 							setsLimit = true
 						}
-					}
-				case *ast.KeyValueExpr:
-					if k, ok := x.Key.(*ast.Ident); ok && k.Name == "DebitCap" {
-						setsLimit = true
 					}
 				case *ast.AssignStmt:
 					for _, lhs := range x.Lhs {
@@ -734,15 +757,22 @@ func testL9NotFromReputation(t *testing.T) {
 				continue // the ledger's own validation, which cannot import the covenant
 			}
 			if setsLimit {
-				setSites++
+				setSites[rel] = true
 			}
 			if setsLimit && readsStanding {
 				t.Errorf("%s: %s sets the credit limit and reads covenant standing: the limit must never be derived from reputation", rel, fn.Name.Name)
 			}
 		}
 	})
-	if setSites == 0 {
-		t.Fatal("found no place outside economy that sets the limit; the check is not looking at the composition roots")
+	// Both composition roots open a ledger with a Policy; if either drops
+	// out of view the check has gone blind, so pin them.
+	for _, root := range []string{
+		filepath.Join("internal", "consumerapi", "server.go"),
+		filepath.Join("cmd", "cloudy", "main.go"),
+	} {
+		if !setSites[root] {
+			t.Errorf("%s sets the credit limit but the check did not see it; the scan is not looking at the composition roots", root)
+		}
 	}
 }
 
