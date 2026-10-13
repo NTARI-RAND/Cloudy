@@ -325,13 +325,22 @@ func testEconomyImports(t *testing.T) {
 // absent: withdrawing a dispute is not a payment.
 var moneyVerb = regexp.MustCompile(`(^|[a-z0-9])(Buy|Purchase|Redeem|Redemption|CashOut|Cashout|Payout|PayOut|TopUp|Topup|Deposit|Mint|Burn|Convert|Conversion|ExchangeRate|Peg|Bridge|Fiat)([A-Z0-9]|$)`)
 
-// moneyRoute is the same vocabulary in an HTTP route path, matched as path
-// words: routePath splits camelCase and turns "_" into "-" first, so
-// "/creditRedeem" and "/cash_out" are caught. Short verbs need a word
-// boundary on both sides, so "peg" in "/img.jpeg" or "buy" in "/buyer"
-// do not match; long verbs only need one on the left, so "/redeemCredit"
-// and "/purchases" do.
-var moneyRoute = regexp.MustCompile(`(^|[^a-z])((buy|mint|burn|peg)([^a-z]|$)|(purchase|redeem|redemption|cash-?out|pay-?out|top-?up|deposit|convert|exchange-?rate|bridge))`)
+// moneyRoute is the same vocabulary in an HTTP route path. routePath first
+// strips any method word, splits camelCase, and turns "_" into "-", so
+// "PATCH /v0/redeem", "/creditRedeem" and "/cash_out" are all caught.
+//
+// Long verbs (purchase, redeem, payout, deposit, ...) match anywhere in the
+// path, so "/repurchase" and "/redeemcredit" are caught; none has a common
+// innocent superstring. Short verbs (buy, mint, burn, peg) need a non-letter
+// on the left, so "peg" inside "/logo.jpeg" does not match but "/buycredits"
+// and "/mintcredit" do; "buy" additionally skips "buyer", so "/buyers" and
+// "/buyer/42" pass.
+//
+// Residual, named rather than hidden: a Go 1.22 host-qualified pattern such
+// as "POST cloudy.local/v0/redeem" is not read as a route, because stripping
+// a host safely would also turn strings like "image/jpeg" into routes. No
+// host-qualified pattern exists in Cloudy today.
+var moneyRoute = regexp.MustCompile(`(^|[^a-z])(buy([^e]|e[^r]|$)|mint|burn|peg)|purchase|redeem|redemption|cash-?out|pay-?out|top-?up|deposit|convert|exchange-?rate|bridge`)
 
 // routeMethod is an HTTP method prefix on a Go 1.22 mux pattern, e.g.
 // "PATCH " in "PATCH /v0/redeem".
@@ -732,6 +741,18 @@ func testL9NotFromReputation(t *testing.T) {
 					if sel, ok := x.Type.(*ast.SelectorExpr); ok && (sel.Sel.Name == "Policy" || sel.Sel.Name == "PolicyChange") {
 						if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "economy" {
 							setsLimit = true
+						}
+					}
+					// An elided element type, e.g. []economy.Policy{{DebitCap: n}},
+					// carries no Type on the inner literal; a DebitCap key there
+					// still sets the limit.
+					if x.Type == nil {
+						for _, el := range x.Elts {
+							if kv, ok := el.(*ast.KeyValueExpr); ok {
+								if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "DebitCap" {
+									setsLimit = true
+								}
+							}
 						}
 					}
 				case *ast.AssignStmt:
