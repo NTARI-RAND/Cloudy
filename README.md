@@ -1,160 +1,115 @@
-# Cloudy
+# Janus Facing Architecture
 
-A frontend on the SoHoLINK / sohocloud coordination network. Cloudy is where
-members transact; it consumes substrate coordination through the shared
-`sohocloud-protocol` module and owns its own JFA member economy on top.
+The official document of the Janus Facing Architecture (JFA), stewarded by
+Network Theory Applied Research Institute, Inc. (NTARI) under
+[its bylaws](https://github.com/NTARI-RAND/bylaws) §1.4(a).
 
-## Status (honest)
+JFA lets communities address the economic reality of prosumership and offers a
+path from exogenous, chartal money to endogenous mutual credit. It is organized
+into five functional layers — Substrate, Record, Covenant, Governance, and
+Economy & Information — each implemented in three tiers: frontend, orchestrator,
+and protocol.
 
-The three JFA member-economy layers Cloudy owns — and the protocol
-deliberately does not — are now **built, with tests**. There is still no live
-coordination loop and no member-facing surface.
+## The document
 
-- **`internal/record` — built.** Dialog-sealed, append-only, witnessed record:
-  each Entry carries both members' seals over canonical, domain-separated
-  bytes, so a half-sealed or self-dealt covenant can never enter a log;
-  per-operator hash-chained logs are fully re-verified on `OpenLog`; operator
-  checkpoints plus independent witness countersignatures make any rewrite of
-  checkpointed history cryptographically detectable (the CT factoring), and a
-  single-witness deployment is labeled the stand-in it is. No PII shape exists
-  in the commons — identifying content lives only in the erasable,
-  member-local Locker. `Entry.ID()`, the leaf hash, is the one cross-layer
-  exchange reference.
-- **`internal/economy` — built.** Per-platform sovereign mutual credit:
-  credit is issued at the moment of spending, within one uniform, governed
-  debit cap, and the sum of all balances is always exactly zero. No mint,
-  fiat field, redemption, or memo is representable; escrow-now/credit-later
-  is exactly one quorum-signed PolicyChange on the same append-only store;
-  `Open` fully replays and re-verifies every record. `Spend.ExchangeHash`
-  carries the record entry's leaf ID but is deliberately opaque and unchecked
-  at Post — anchoring is a composition-root concern.
-- **`internal/covenant` — built.** Reputation on NTARI's Leveson-Based Trade
-  Assessment Scale (LBTAS): six meaning-loaded levels from -1 No Trust to
-  +4 Delight, bidirectional (both parties to a sealed exchange assess each
-  other), rendered per category over a closed vocabulary (defaults:
-  reliability, usability, performance, support), and read only as full
-  count-per-level distributions — per-category, pooled overall, and a harm
-  count that surfaces every -1 — **never averaged**, with no score, export,
-  amendment, retraction, or cross-member comparison anywhere (two tripwire
-  tests — a reflection method-set scan and a go/ast exported-function scan —
-  keep it that way). A -1 verdict requires a justifying comment;
-  the comment text lives in the erasable member-local Locker while only its
-  hash rides in the commons. Every assessment is assessor-signed and priced
-  at one sealed exchange through the Anchors gate; member IDs are
-  platform-scoped key hashes, and human-chosen IDs are rejected outright.
-  The binding spec and reference implementation live at
-  `Development/Covenant/Leveson-Based-Trade-Assessment-Scale`.
-- **Real but thin:** `internal/coord` — a thin client over the protocol's
-  reference HTTP+JSON transport, proving Cloudy consumes `sohocloud-protocol`.
-  `cmd/cloudy` constructs it and reports startup; there is no live coordination
-  loop yet.
+| | |
+|---|---|
+| **Official document** | [janus-facing-architecture.md](janus-facing-architecture.md) |
+| **Unresolved questions** | [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md) |
+| **Concepts carried from prior instruments** | [jfa-concept-triage-2026-08-24.md](jfa-concept-triage-2026-08-24.md) |
+| **Executable conformance suite** | [jfa-conformance-suite.py](jfa-conformance-suite.py) |
+| **Substrate under carrier constraints (P1-004, companion paper)** | [P1-004_Substrate-Constraints_v0.1.md](P1-004_Substrate-Constraints_v0.1.md) |
+| **Prior instruments** | [Historical Docs/](Historical%20Docs/) |
 
-`cmd/cloudy` now constructs all three layers in memory at startup (ModeEscrow
-genesis, empty operator log, empty covenant book over an empty shared member
-directory) and logs one honest line per layer. Each package names its
-non-negotiable invariants in its package doc.
+The English document is authoritative. Translations are provided for reach, not
+for interpretation.
 
-## What Cloudy owns (architecture)
+| Language | File |
+|---|---|
+| العربية (Arabic) | [janus-facing-architecture.ar.md](janus-facing-architecture.ar.md) |
+| Español (Spanish) | [janus-facing-architecture.es.md](janus-facing-architecture.es.md) |
+| Français (French) | [janus-facing-architecture.fr.md](janus-facing-architecture.fr.md) |
+| हिन्दी (Hindi) | [janus-facing-architecture.hi.md](janus-facing-architecture.hi.md) |
+| Português (Portuguese) | [janus-facing-architecture.pt.md](janus-facing-architecture.pt.md) |
+| toki pona | [janus-facing-architecture.tok.md](janus-facing-architecture.tok.md) |
+| 中文 (Chinese) | [janus-facing-architecture.zh.md](janus-facing-architecture.zh.md) |
 
-Under the resolved architecture, Cloudy — the frontend — owns the member's
-whole world. Three capabilities, one owner:
+## The lines that cannot be crossed
 
-- **The JFA member economy — built.** `internal/economy` (member-issued
-  credit), `internal/covenant` (LBTAS reputation), `internal/record`
-  (dialog-sealed record), exactly as documented above. These are Cloudy's and
-  deliberately not the protocol's: persons never appear on the wire.
-- **The node agent — Cloudy-owned, currently hosted in the coordinator repo
-  pending migration.** Hardware detection, resource profiles,
-  capability-listing generation, heartbeat, the job executor, local
-  opt-out/allowlist enforcement, telemetry, and the member-machine installer.
-  This code (`internal/agent`, `cmd/agent`, and the MSI installer) lives in
-  the SoHoLINK repo today and keeps working there — a leftover of SoHoLINK's
-  dual frontend+coordinator era, not SoHoLINK's long-term role. The agent is
-  the member's presence on their own machine, so it belongs to the frontend;
-  a coordinator that ships agents onto member hardware is a coordinator that
-  touches member hardware, which SoHoLINK must never do.
-- **The member portal — Cloudy-owned, currently hosted in the coordinator
-  repo pending migration.** Register, login, dashboard, job submission, and
-  opt-out. The surface formerly called the "participant portal"
-  (`internal/portal`, `cmd/portal`, `web/` in the SoHoLINK repo) is
-  henceforth Cloudy's member portal — member identity is a frontend concern,
-  so the door members walk through must be the frontend's door.
+The section of the official document titled *The Lines That Cannot Be Crossed*
+carries the twelve provisions that no conforming implementation may violate.
+Read it before building.
 
-The node agent and the member portal are the next build milestones now that
-the three layers are library-complete. As the status above says honestly:
-neither has an ingress here yet, and nothing in this repo pretends the
-migration has already happened.
+## Implementations
 
-### Glossary
+Reference implementations and instances live in their own repositories:
 
-- **Member** — a person, always relative to a frontend/platform. Identity
-  (platform-scoped MemberID), credit, LBTAS standing, sealed records, PII
-  (erasable, member-local), and contributed machines are membership facts.
-  Membership is covenant language — mutual obligation to a particular
-  platform; the same human is a different member on every platform by
-  cryptographic construction.
-- **Participant** — a role, not an entity: a member acting in the
-  coordinated economy, contributing nodes and/or submitting jobs — one
-  unified identity, never split into producer and consumer.
-  Coordinator-side person-records (SoHoLINK's participants table and portal
-  accounts) are transitional surfaces from the dual era.
-- **Node** — a machine a member contributes, identified by NodeID with the
-  SPIFFE binding `/node/<id>` (the protocol's `identity/` package).
+- [Tell](https://github.com/NTARI-RAND/Tell) — the Record layer: per-operator,
+  witnessed, append-only record
+- [Agrinet](https://github.com/NTARI-RAND/Agrinet) — federated agriculture
+  network protocol
+- [SoHoLINK](https://github.com/NTARI-RAND/SoHoLINK) ·
+  [Cloudy](https://github.com/NTARI-RAND/Cloudy) ·
+  [sohocloud-protocol](https://github.com/NTARI-RAND/sohocloud-protocol) —
+  Substrate layer
+- [lighthouse](https://github.com/NTARI-RAND/lighthouse) ·
+  [shelter](https://github.com/NTARI-RAND/shelter) ·
+  [childcare-trust-network](https://github.com/NTARI-RAND/childcare-trust-network) ·
+  [shanina](https://github.com/NTARI-RAND/shanina) ·
+  [COER](https://github.com/NTARI-RAND/COER) ·
+  [world-chase-tag](https://github.com/NTARI-RAND/world-chase-tag) — Economy &
+  Information layer seeds and instances
 
-### Identity toward the coordinator
+Seeds conform to the standard; the shape bends, the floors bind.
 
-Two identities cross the frontend/coordinator boundary, and they must not be
-conflated. Members' machines carry **workload identity**: a SPIFFE SVID under
-`/node/<id>`, authorized coordinator-side exactly per the protocol SPEC —
-machine identity, unchanged. Cloudy itself authenticates as an enrolled
-**operator**: the frontend-as-operator model, a **design target** patterned
-on Agrinet's Phase 5 operator scheme (an operators + operator-keys registry;
-a rotating Ed25519 key set of seven, each transmission signed with two;
-replay bounded by a timestamp window plus nonce cache — see
-`Development/Economy/Agrinet backend/lib/operatorKeys.js` and
-`backend/middleware/operatorAuth.js`). Rotation is the point: a static,
-never-rotated shared key is precisely the anti-pattern the reference warns
-against inheriting. Neither identity is ever a person: member identity stays
-inside Cloudy.
+## Verifying the document
 
-## Import-graph invariant
-
-Cloudy imports `sohocloud-protocol`; **nothing imports Cloudy**. Cloudy depends
-on the protocol's core and its reference transport and reaches around neither.
-The dependency direction is what keeps the frontend and the coordinator
-separable: a frontend can be replaced without touching the substrate, and the
-substrate does not know about any particular frontend.
-
-Within Cloudy, the three JFA packages never import each other; each sees only
-the standard library and the protocol's `canon` package, and all imports stay
-one-directional. They meet only at the composition root: `test/composition`
-is the one composition-root test — the single shared member directory, the
-Anchors predicate joining covenant to record on `Entry.ID()`, and the full
-member story live there — and `cmd/cloudy` performs the same composition at
-startup.
-
-## Building
-
-The protocol module is currently private and untagged. This skeleton resolves it
-via a `replace` directive to a **local sibling checkout**:
+The suite is the load-bearing rung: it binds the prose to a registry of
+invariants with stable IDs, so the document and the registry cannot drift apart
+without the check failing. Standard library only, no dependencies.
 
 ```
-replace github.com/NTARI-RAND/sohocloud-protocol => ../sohocloud-protocol
+python jfa-conformance-suite.py                 # check the document
+python jfa-conformance-suite.py --list          # print the invariant registry
+python jfa-conformance-suite.py --doc PATH      # check another copy
+python jfa-conformance-suite.py --project PATH  # check a repo's open-questions deliverable
+python jfa-conformance-suite.py --bindings ../Cloudy [../other-repo ...]
+                                                # also report which delegated
+                                                # invariants those repos bind
 ```
 
-So `sohocloud-protocol` must be cloned next to `Cloudy` (both under the same
-parent directory). This `replace` is a local-development convenience — it is not
-buildable by others as-is. Publishing Cloudy for external build will require
-tagging the protocol module (or a `GOPRIVATE` + authenticated-fetch setup) and
-dropping the `replace`.
+`--bindings` scans implementation repositories you have cloned beside this one
+for test functions named `TestInvariant_<ID>_<Name>` (with any `-` in the ID
+written `_`) and marks each implementation invariant they cite as **BOUND** —
+the binding the bylaws define in P1-001 §9.14(b). It reports that a citing test
+*exists*; whether it passes is that repository's own CI, so the suite never
+reports a delegated invariant as passing (§9.15). A test citing an unregistered
+ID fails the run.
 
-```
-go build ./...
-go test ./...
-```
+Exit code 0 when every executed check passes, 1 otherwise. Run it after any
+edit to the official document.
+
+Of the 26 registered invariants, 3 are bound here at the document layer and 23
+are **delegated** — they bind running software or a governance instrument, and
+can only be enforced by tests living beside that code or that instrument. They
+are carried in the registry with stable IDs and reported as delegated and
+unbound until a repo ships tests citing those IDs. A conformant repo cites the
+IDs; until it does, its conformance is self-attested. Reporting a delegated
+invariant as "checked" from here would be self-attestation wearing a test
+runner, so the stand-in is labeled instead.
+
+## Not yet published here
+
+The dispute-mechanics design — "the dispute-mechanics design" as
+[the bylaws](https://github.com/NTARI-RAND/bylaws) §1.5 defines it — and the
+structure and robotics articles are held in NTARI's document store and are not
+in this repository yet.
 
 ## License
 
-AGPL-3.0-or-later.
+Two licenses, as the document's own footer states:
 
-*Network Theory Applied Research Institute, Inc. — 501(c)(3) — EIN 92-3047136 — info@ntari.org*
+| What | License |
+|---|---|
+| The specification — the official document, its translations, and the prior instruments | [CC BY-SA 4.0](LICENSE-SPEC) |
+| The software — the conformance suite | [AGPL-3.0](LICENSE) |
