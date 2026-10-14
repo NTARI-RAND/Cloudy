@@ -7,6 +7,7 @@ package record
 // invariant: TestInvariant_<ID>_<Name>, with any "-" in the ID written "_".
 
 import (
+	"crypto/ed25519"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -514,4 +516,194 @@ func receiverName(e ast.Expr) string {
 		return receiverName(x.X)
 	}
 	return ""
+}
+
+// TestInvariant_REC_witness_minimum_UnfederatedLabel binds registry ID
+// REC-witness-minimum: "an operator platform with fewer than two independent
+// witnesses forces the unfederated label."
+//
+//   - the label is computed, not asserted: WitnessedCheckpoint.StandIn is
+//     true for zero or one witness, and stays true when the "second witness"
+//     is the operator itself, the same witness twice, a forged signature, or
+//     a signature over a different checkpoint; it drops only when two
+//     distinct, operator-independent witnesses have verifiably countersigned;
+//   - every member-facing surface that serves a witnessed checkpoint carries
+//     the label: any served struct with a countersignatures field also has a
+//     stand_in field, and every place one is built sets it from a StandIn(…)
+//     call, never a hard-coded true or false.
+//
+// Named exception: the witness relay's BundleMsg carries countersignatures
+// without a label by design — the relay "does not rank, filter, or count
+// them" and readers apply StandIn themselves (internal/relay doc; its
+// TestFederationDropsTheStandInLabel shows a reader dropping the label once
+// two independent witnesses cosign). It is pinned by name so no new surface
+// can hide behind it.
+func TestInvariant_REC_witness_minimum_UnfederatedLabel(t *testing.T) {
+	t.Run("the label is computed from verified independent witnesses", testWitnessMinimumMatrix)
+	t.Run("every served checkpoint carries the computed label", testWitnessMinimumSurfaces)
+}
+
+func testWitnessMinimumMatrix(t *testing.T) {
+	op := newParty(t)
+	a, b := newParty(t), newParty(t)
+	l, _, _ := buildLog(t, op, a, b, 2)
+	cp := l.Checkpoint(testInstant)
+	cp.Sign(op.priv)
+	other := l.Checkpoint(testInstant.Add(time.Hour)) // same head, different checkpoint bytes
+	other.Sign(op.priv)
+
+	cosign := func(w party, c Checkpoint) Countersignature {
+		t.Helper()
+		cs, err := NewWitness(w.priv).Countersign(c, op.pub, nil)
+		if err != nil {
+			t.Fatalf("Countersign: %v", err)
+		}
+		return cs
+	}
+	w1, w2, w3 := newParty(t), newParty(t), newParty(t)
+	// The operator cannot obtain a countersignature through Witness; forge
+	// the shape directly to prove StandIn still refuses to count it.
+	opCosig := Countersignature{Witness: op.pub, Signature: ed25519.Sign(op.priv, witnessPayload(cp))}
+	forged := cosign(w2, cp)
+	forged.Signature = append([]byte(nil), forged.Signature...)
+	forged.Signature[0] ^= 0xFF
+
+	cases := []struct {
+		name    string
+		cosigs  []Countersignature
+		standIn bool
+	}{
+		{"no witness", nil, true},
+		{"one witness", []Countersignature{cosign(w1, cp)}, true},
+		{"one witness plus the operator", []Countersignature{cosign(w1, cp), opCosig}, true},
+		{"the same witness twice", []Countersignature{cosign(w1, cp), cosign(w1, cp)}, true},
+		{"one witness plus a forged signature", []Countersignature{cosign(w1, cp), forged}, true},
+		{"one witness plus a cosignature of another checkpoint", []Countersignature{cosign(w1, cp), cosign(w2, other)}, true},
+		{"two independent witnesses", []Countersignature{cosign(w1, cp), cosign(w2, cp)}, false},
+		{"three independent witnesses", []Countersignature{cosign(w1, cp), cosign(w2, cp), cosign(w3, cp)}, false},
+	}
+	for _, c := range cases {
+		wc := WitnessedCheckpoint{Checkpoint: cp, Countersignatures: c.cosigs}
+		if got := wc.StandIn(op.pub); got != c.standIn {
+			t.Errorf("%s: StandIn = %v, want %v", c.name, got, c.standIn)
+		}
+	}
+}
+
+// labelExempt are served types that carry countersignatures without a
+// stand_in field, each with the reason.
+var labelExempt = map[string]string{
+	filepath.Join("internal", "relay") + ".BundleMsg": "non-authoritative relay; readers compute StandIn",
+}
+
+func testWitnessMinimumSurfaces(t *testing.T) {
+	root := moduleRoot(t)
+	type file struct {
+		rel string
+		f   *ast.File
+	}
+	var files []file
+	walkSource(t, root, func(rel string, f *ast.File) { files = append(files, file{rel, f}) })
+
+	jsonName := func(tag *ast.BasicLit) string {
+		if tag == nil {
+			return ""
+		}
+		v, _ := strconv.Unquote(tag.Value)
+		j := reflect.StructTag(v).Get("json")
+		return strings.Split(j, ",")[0]
+	}
+
+	// Pass 1: served structs carrying countersignatures, and whether each
+	// also carries a stand_in bool.
+	labelled := map[string]bool{} // dir.Type -> has StandIn
+	exemptSeen := map[string]bool{}
+	for _, fl := range files {
+		if strings.HasPrefix(fl.rel, filepath.Join("internal", "record")+string(filepath.Separator)) {
+			continue // the record layer's own types; StandIn is a method there
+		}
+		dir := filepath.Dir(fl.rel)
+		ast.Inspect(fl.f, func(n ast.Node) bool {
+			ts, ok := n.(*ast.TypeSpec)
+			if !ok {
+				return true
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				return true
+			}
+			hasCosigs, hasLabel := false, false
+			for _, fld := range st.Fields.List {
+				switch jsonName(fld.Tag) {
+				case "countersignatures":
+					hasCosigs = true
+				case "stand_in":
+					if id, ok := fld.Type.(*ast.Ident); ok && id.Name == "bool" {
+						hasLabel = true
+					}
+				}
+			}
+			if !hasCosigs {
+				return true
+			}
+			key := dir + "." + ts.Name.Name
+			if _, ok := labelExempt[key]; ok {
+				exemptSeen[key] = true
+				return true
+			}
+			labelled[key] = hasLabel
+			if !hasLabel {
+				t.Errorf("%s: %s serves countersignatures without a stand_in bool: a surface presenting witnessed data must carry the unfederated label", fl.rel, ts.Name.Name)
+			}
+			return true
+		})
+	}
+	for key := range labelExempt {
+		if !exemptSeen[key] {
+			t.Errorf("labelExempt lists %s, which no longer serves countersignatures — remove it", key)
+		}
+	}
+	if len(labelled) == 0 {
+		t.Fatal("found no member-facing type serving countersignatures; the scan is not looking at the surfaces")
+	}
+
+	// Pass 2: every literal of a labelled type sets StandIn from a StandIn(…)
+	// call — never a constant.
+	built := 0
+	for _, fl := range files {
+		dir := filepath.Dir(fl.rel)
+		ast.Inspect(fl.f, func(n ast.Node) bool {
+			cl, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			id, ok := cl.Type.(*ast.Ident)
+			if !ok || !labelled[dir+"."+id.Name] {
+				return true
+			}
+			built++
+			computed := false
+			for _, el := range cl.Elts {
+				kv, ok := el.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if k, ok := kv.Key.(*ast.Ident); !ok || k.Name != "StandIn" {
+					continue
+				}
+				if call, ok := kv.Value.(*ast.CallExpr); ok {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "StandIn" {
+						computed = true
+					}
+				}
+			}
+			if !computed {
+				t.Errorf("%s: a %s is built without StandIn set from a StandIn(…) call: the label must be computed, never asserted", fl.rel, id.Name)
+			}
+			return true
+		})
+	}
+	if built == 0 {
+		t.Fatal("found no place that builds a labelled checkpoint response; the scan is not looking at the handlers")
+	}
 }
