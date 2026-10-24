@@ -132,8 +132,15 @@ func (c *Client) do(ctx context.Context, method, path string, reqBody, respBody 
 	if err != nil {
 		return fmt.Errorf("%s %s: %w", method, path, err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	defer func() { _ = resp.Body.Close() }() // Reading the body reports transport errors below.
+	return decodeResponse(method, path, resp, respBody)
+}
+
+func decodeResponse(method, path string, resp *http.Response, respBody any) error {
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("read %s %s response: %w", method, path, err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg := strings.TrimSpace(string(raw))
 		var ae apiError
