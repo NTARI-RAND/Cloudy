@@ -125,6 +125,25 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestRunReportsOutputFailure(t *testing.T) {
+	for _, withRoot := range []bool{false, true} {
+		t.Run(map[bool]string{false: "keyset", true: "root"}[withRoot], func(t *testing.T) {
+			args := []string{"-dir", filepath.Join(t.TempDir(), "keys")}
+			if withRoot {
+				args = append(args, "-root", filepath.Join(t.TempDir(), "output-failure.seed"))
+			}
+			out, err := os.Open(os.DevNull)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = out.Close() }()
+			if err := run(args, out); err == nil {
+				t.Fatal("run succeeded with an unwritable output")
+			}
+		})
+	}
+}
+
 // prefixForIndex is the printed line prefix for public key i.
 func prefixForIndex(i int) string {
 	return string(rune('0'+i)) + ": "
