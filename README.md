@@ -153,6 +153,13 @@ go build ./...
 go test ./...
 ```
 
+## Signed claim downloads
+
+The member API can [download complete signed claims](docs/signed-claim-export.md)
+for offline signature and leaf-ID verification. The export contains structural
+commitments, never the member-local narrative, and does not certify truth or
+independent witnessing.
+
 ## License
 
 AGPL-3.0-or-later.

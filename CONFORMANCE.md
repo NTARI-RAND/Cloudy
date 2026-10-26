@@ -65,3 +65,14 @@ Consumes `sohocloud-protocol` at a published version tag — nothing else from t
 ## Product-specific notes (last, per the ordering rule)
 
 Cloudy ships as a standalone consumer product (its own member API and app surfaces, in review). SoHoLINK is the reference coordinator it speaks to; any conformant coordinator may replace it.
+
+The public claim export (`GET /api/v1/claims/{id}/export`) returns the complete
+existing signed Technology Tree claim, including hashes, nonce, signature and
+an exact decimal-string nanosecond instant. It has no narrative fields and
+reads no Locker content. Bindings: `internal/consumerapi/claim_export.go` and
+`TestClaimExportVerifiesOfflineWithoutNarrative`, which reconstructs the
+artifact from the downloaded bytes, verifies its signature/ID and rejects
+signed-field tampering. The existing summary response remains unchanged.
+This proves signed authorship, not truth or independent witnessing; the
+Technology Tree remains its documented unwitnessed single-writer stand-in.
+See `docs/signed-claim-export.md` for the format and verification boundaries.
