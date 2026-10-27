@@ -5,33 +5,56 @@
 // implementations (Docker, gopsutil, an Android storage provider, GPU) are
 // pluggable Executors, not the definition.
 //
-// This entrypoint is honest about what it is today: the seam and control loop
-// are real and tested; the registered executors are a real Storage node (over
-// internal/storage's proof-of-possession), a placeholder Compute echo standing
-// in for the Docker executor, and a demo presence Service. The Docker/gopsutil/
-// spiffe port and the agent->cloudyd->/v0 relay are the named next steps; they
-// land behind this seam without changing it.
+// This entrypoint is honest about what it is today: the seam, the control loop
+// and the agent → coordinator loop (loop.go) are real and tested; the
+// registered executors are a real Storage node (over internal/storage's
+// proof-of-possession), a placeholder Compute echo standing in for the Docker
+// executor, and a demo presence Service.
+//
+// With -coordinator set, the agent lists itself, heartbeats, polls for work and
+// reports, over outbound calls only. The transport is the protocol's reference
+// HTTP+JSON client with no transport authentication: a production coordinator
+// (SoHoLINK) refuses it until one of the two named next steps lands — the
+// node's own SPIFFE SVID (direct), or the agent → cloudyd → /v0 operator relay.
+// Messages are already signed with the node key either way. The Docker/
+// gopsutil port lands behind the executor seam without changing the loop.
 package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
+	"github.com/NTARI-RAND/sohocloud-protocol/identity"
+	"github.com/NTARI-RAND/sohocloud-protocol/listing"
+
 	"github.com/NTARI-RAND/Cloudy/internal/contribute"
+	"github.com/NTARI-RAND/Cloudy/internal/coord"
 )
 
 func main() {
 	var (
-		nodeID   = flag.String("node", "cloudy-node-0", "node identifier")
-		pinned   = flag.Bool("pinned", true, "pinned (dedicated) capacity; false = scavenged (idle-first)")
-		withSvc  = flag.Bool("service", true, "offer the demo presence service (requires -pinned)")
-		selftest = flag.Bool("selftest", true, "run a store->audit->echo self-test and exit")
+		nodeID    = flag.String("node", "cloudy-node-0", "node identifier")
+		pinned    = flag.Bool("pinned", true, "pinned (dedicated) capacity; false = scavenged (idle-first)")
+		withSvc   = flag.Bool("service", true, "offer the demo presence service (requires -pinned)")
+		selftest  = flag.Bool("selftest", true, "run a store->audit->echo self-test and exit (ignored with -coordinator)")
+		coordURL  = flag.String("coordinator", "", "coordinator base URL; when set, run the agent → coordinator loop")
+		keyPath   = flag.String("node-key", "cloudy-node.key", "node ed25519 key file (hex seed); created with mode 0600 if missing")
+		coordPub  = flag.String("coordinator-key", "", "coordinator ed25519 public key (hex); assignments are verified against it")
+		class     = flag.String("class", string(listing.ClassStandard), "compute class: micro | standard | server")
+		hbEvery   = flag.Duration("heartbeat", 30*time.Second, "heartbeat interval")
+		pollEvery = flag.Duration("poll", 10*time.Second, "job poll interval")
 	)
 	flag.Parse()
 
@@ -70,6 +93,16 @@ func main() {
 	// pinned nodes are never gated, so this stub is correct for -pinned.
 	agent := NewAgent(reg, func() bool { return false }, log)
 	log.Info("cloudy-agent up", "node", *nodeID, "placement", placement.String(), "capabilities", capsToStrings(agent.Capabilities()))
+
+	if *coordURL != "" {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		if err := runLoop(ctx, agent, reg, log, *coordURL, *nodeID, *keyPath, *coordPub, *class, *hbEvery, *pollEvery); err != nil {
+			log.Error("coordinator loop", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *selftest {
 		runSelfTest(context.Background(), agent, log)
@@ -127,4 +160,75 @@ func runSelfTest(ctx context.Context, agent *Agent, log *slog.Logger) {
 		_ = agent.ServeService(sctx, contribute.AssignedJob{ID: "svc-1", Kind: contribute.Service})
 		log.Info("service healthy after stop", "healthy", svc.Healthy())
 	}
+}
+
+// runLoop runs the agent → coordinator loop until ctx ends, serving the pinned
+// service alongside it when there is one.
+func runLoop(ctx context.Context, agent *Agent, reg *contribute.Registry, log *slog.Logger,
+	coordURL, nodeID, keyPath, coordPubHex, class string, hb, poll time.Duration) error {
+	key, err := loadOrCreateKey(keyPath)
+	if err != nil {
+		return err
+	}
+	var coordKey ed25519.PublicKey
+	if coordPubHex != "" {
+		raw, err := hex.DecodeString(strings.TrimSpace(coordPubHex))
+		if err != nil || len(raw) != ed25519.PublicKeySize {
+			return fmt.Errorf("-coordinator-key: want %d bytes of hex", ed25519.PublicKeySize)
+		}
+		coordKey = raw
+	}
+	switch listing.ComputeClass(class) {
+	case listing.ClassMicro, listing.ClassStandard, listing.ClassServer:
+	default:
+		return fmt.Errorf("-class %q: want micro, standard or server", class)
+	}
+	log.Info("node key ready; the coordinator must enroll this public key",
+		"node", nodeID, "public_key", hex.EncodeToString(key.Public().(ed25519.PublicKey)))
+
+	if _, ok := reg.Service(); ok {
+		go func() {
+			if err := agent.ServeService(ctx, contribute.AssignedJob{ID: "presence-0", Kind: contribute.Service}); err != nil && ctx.Err() == nil {
+				log.Error("service failed", "err", err)
+			}
+		}()
+	}
+	l := &Loop{
+		Agent: agent, Coord: coord.Dial(coordURL), Node: identity.NodeID(nodeID),
+		Key: key, CoordKey: coordKey, Class: listing.ComputeClass(class),
+		Heartbeat: hb, Poll: poll, Log: log,
+	}
+	if err := l.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
+}
+
+// loadOrCreateKey reads the node's ed25519 seed (hex) from path, creating it
+// with owner-only permissions on first run. The private key never leaves this
+// machine; only signatures and the public key do.
+func loadOrCreateKey(path string) (ed25519.PrivateKey, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, err
+		}
+		seed := hex.EncodeToString(priv.Seed()) + "\n"
+		if err := os.WriteFile(path, []byte(seed), 0o600); err != nil {
+			return nil, fmt.Errorf("write node key: %w", err)
+		}
+		return priv, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read node key: %w", err)
+	}
+	if info, err := os.Stat(path); err == nil && info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("node key %s is readable by others (mode %o); chmod 600 it", path, info.Mode().Perm())
+	}
+	seed, err := hex.DecodeString(strings.TrimSpace(string(data)))
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("node key %s: want a %d-byte hex seed", path, ed25519.SeedSize)
+	}
+	return ed25519.NewKeyFromSeed(seed), nil
 }
