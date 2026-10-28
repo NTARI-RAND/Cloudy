@@ -334,6 +334,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/claims", s.handleAnchorClaim)
 	mux.HandleFunc("GET /api/v1/claims/{id}", s.handleGetClaim)
 	mux.HandleFunc("POST /api/v1/references", s.handleAddReference)
+	mux.HandleFunc("GET /api/v1/claims/{id}/references", s.handleGetReferences)
 	mux.HandleFunc("GET /api/v1/market/categories", s.handleCategories)
 	mux.HandleFunc("POST /api/v1/market/listings", s.handleCreateListing)
 	mux.HandleFunc("GET /api/v1/market/listings", s.handleBrowseListings)
