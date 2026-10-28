@@ -66,3 +66,7 @@ Consumes `sohocloud-protocol` at a published version tag — nothing else from t
 ## Product-specific notes (last, per the ordering rule)
 
 Cloudy ships as a standalone consumer product (its own member API and app surfaces, in review). SoHoLINK is the reference coordinator it speaks to; any conformant coordinator may replace it.
+
+### Signed reference discovery
+
+`GET /api/v1/claims/{id}/references` exposes accepted structural edges in append order, with bounded pages and complete signed fields. Decimal-string nanoseconds preserve independent signature verification; no narrative is included and no relationship becomes a truth score. `TestReferenceDiscoveryPages`, `TestReferenceDiscoveryEmptyAndAppend`, `TestReferenceDiscoveryBounds`, and `TestReferenceDiscoveryValidation` bind filtering, cursor stability, signature/precision preservation, privacy, and invalid-input behavior. This additive read does not change the techtree's single-writer stand-in status.
