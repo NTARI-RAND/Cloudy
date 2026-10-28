@@ -66,3 +66,7 @@ Consumes `sohocloud-protocol` at a published version tag — nothing else from t
 ## Product-specific notes (last, per the ordering rule)
 
 Cloudy ships as a standalone consumer product (its own member API and app surfaces, in review). SoHoLINK is the reference coordinator it speaks to; any conformant coordinator may replace it.
+
+### Witness key-file custody
+
+`witnessd -seed-file` checks regular-file type, effective-user ownership, owner-only permissions, and macOS extended ACLs on the opened file before reading a bounded hexadecimal seed. Unsupported platform/build access checks fail closed. `TestWitnessSeedFileIdentity`, `TestWitnessSeedFileRejectsUnsafeInput`, `TestWitnessSeedFileRejectsSymlink`, `TestWitnessSeedFileRejectsACL` (macOS), and `TestWitnessSeedCompatibility` bind stable public identity, startup refusal, private-material exclusion from diagnostics, and legacy/demo behavior. This persists key identity only: rollback memory remains ephemeral, trust on first checkpoint remains, and no federation or registry is introduced.

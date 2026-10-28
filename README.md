@@ -158,3 +158,5 @@ go test ./...
 AGPL-3.0-or-later.
 
 *Network Theory Applied Research Institute, Inc. — 501(c)(3) — EIN 92-3047136 — info@ntari.org*
+
+Witness operators: use [`witnessd -seed-file`](docs/witness-seed-files.md) for persistent identity without placing private seed material in process arguments.
