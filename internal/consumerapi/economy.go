@@ -113,9 +113,12 @@ type spendRequest struct {
 //
 // While the governed policy is escrow mode, the ledger refuses every spend
 // with ErrCreditDisabled and this endpoint reports that honestly as 409 —
-// the escrow→credit transition is a governed PolicyChange (bylaws §5.7:
-// Board approval, membership notice, completed regulatory review), never an
-// API affordance. There is deliberately no endpoint that could flip it.
+// the escrow→credit transition is a governed PolicyChange, made only once
+// the operator passes the gate of L10 and bylaws §11.1–11.3 (capacity built,
+// 30 days' notice, authorizations or a finding that none are required
+// published to the governance registry, prosumer ratification for full
+// credit; no Board approval step, §7.6), never an API affordance. There is
+// deliberately no endpoint that could flip it.
 func (s *Server) handlePostSpend(w http.ResponseWriter, r *http.Request) {
 	var req spendRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
