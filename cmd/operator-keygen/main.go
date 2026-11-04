@@ -8,6 +8,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -38,31 +39,36 @@ func run(args []string, stdout io.Writer) error {
 	if *dir == "" {
 		return errors.New("-dir is required")
 	}
+	return bootstrap(*dir, *rootPath, stdout)
+}
 
+func bootstrap(dir, rootPath string, stdout io.Writer) error {
 	ks, err := opcred.GenerateKeyset()
 	if err != nil {
 		return err
 	}
-	if err := ks.Save(*dir); err != nil {
+	if err := ks.Save(dir); err != nil {
 		// Save refuses to overwrite and names the colliding file.
 		return err
 	}
 
-	fmt.Fprintf(stdout, "keyset written to %s\n", *dir)
-	fmt.Fprintln(stdout, "public keys (base64, index order):")
+	var output bytes.Buffer
+	fmt.Fprintf(&output, "keyset written to %s\n", dir)
+	fmt.Fprintln(&output, "public keys (base64, index order):")
 	for i, pub := range ks.PublicKeys() {
-		fmt.Fprintf(stdout, "  %d: %s\n", i, base64.StdEncoding.EncodeToString(pub))
+		fmt.Fprintf(&output, "  %d: %s\n", i, base64.StdEncoding.EncodeToString(pub))
 	}
 	hash := ks.Hash()
-	fmt.Fprintf(stdout, "keyset hash: %s\n", base64.StdEncoding.EncodeToString(hash[:]))
+	fmt.Fprintf(&output, "keyset hash: %s\n", base64.StdEncoding.EncodeToString(hash[:]))
 
-	if *rootPath != "" {
-		root, err := opcred.GenerateFileRoot(*rootPath)
+	if rootPath != "" {
+		root, err := opcred.GenerateFileRoot(rootPath)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "root seed written to %s (software stand-in for a device root)\n", *rootPath)
-		fmt.Fprintf(stdout, "root public key: %s\n", base64.StdEncoding.EncodeToString(root.PublicKey()))
+		fmt.Fprintf(&output, "root seed written to %s (software stand-in for a device root)\n", rootPath)
+		fmt.Fprintf(&output, "root public key: %s\n", base64.StdEncoding.EncodeToString(root.PublicKey()))
 	}
-	return nil
+	_, err = io.Copy(stdout, &output)
+	return err
 }
