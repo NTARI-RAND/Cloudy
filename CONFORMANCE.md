@@ -77,3 +77,18 @@ signed-field tampering. The existing summary response remains unchanged.
 This proves signed authorship, not truth or independent witnessing; the
 Technology Tree remains its documented unwitnessed single-writer stand-in.
 See `docs/signed-claim-export.md` for the format and verification boundaries.
+
+Public hardware-offer browsing supports exact maker-key and signed accepted-rail
+filters, plus opt-in bounded append-order pages. Repeated rails match any selected
+rail; category and maker filters combine with that selection. The maker remains
+the same platform member identity. These are structural discovery controls:
+credit acceptance does not switch the economy out of escrow or authorize a
+credit spend. No narrative, scoring, promotion or settlement authority is added.
+Bindings: `internal/market/browse.go`, `internal/consumerapi/market_query.go`, and
+`TestMarketplaceBrowseFilters`, `TestMarketplaceBrowsePagesAcrossSalesAndAppends`,
+`TestMarketplaceBrowseRejectsMalformedFilters`,
+`TestMarketplaceBrowseLegacyAndEmptyCategory`, `TestMarketplaceBrowsePageBounds`.
+Pages avoid full-log/category/sales-history copies, but sparse filters can scan
+the remaining catalogue. Existing unpaged reads remain unbounded; in-memory,
+single-writer and witnessing limitations remain unchanged. See
+`docs/marketplace-browse.md` for query syntax and compatibility limits.

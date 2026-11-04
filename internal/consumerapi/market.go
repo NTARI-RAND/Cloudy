@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/NTARI-RAND/Cloudy/internal/market"
@@ -138,26 +139,46 @@ func (s *Server) listingViewLocked(id market.ListingID, l market.Listing) listin
 		AcceptFiat:   l.Rails.Fiat,
 		AcceptCredit: l.Rails.MemberCredit,
 		ListedAt:     l.ListedAt.UTC().Format(time.RFC3339Nano),
-		SalesCount:   len(s.catalog.SalesOf(id)),
+		SalesCount:   s.catalog.SalesCount(id),
 	}
 }
 
-// handleBrowseListings lists listings in a category (query ?category=), in
-// append order — never ranked or promoted. Public.
+// handleBrowseListings returns public, append-ordered structural summaries.
+// limit or cursor opts into bounded pages; existing unpaged reads stay compatible.
 func (s *Server) handleBrowseListings(w http.ResponseWriter, r *http.Request) {
-	cat := market.Category(r.URL.Query().Get("category"))
+	query, paged, err := parseMarketQuery(r.URL.RawQuery)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, errMarketQuery.Error())
+		return
+	}
+	out, next, err := s.browseListings(query)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response := struct {
+		Listings   []listingView `json:"listings"`
+		NextCursor string        `json:"next_cursor,omitempty"`
+	}{Listings: out}
+	if paged && next != 0 {
+		response.NextCursor = strconv.Itoa(next)
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) browseListings(query market.ListingQuery) ([]listingView, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ids := s.catalog.ByCategory(cat)
-	out := make([]listingView, 0, len(ids))
-	for _, id := range ids {
-		l, ok := s.catalog.Listing(id)
-		if !ok {
-			continue
-		}
+	page, err := s.catalog.Browse(query)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]listingView, 0, len(page.IDs))
+	for _, id := range page.IDs {
+		l, _ := s.catalog.Listing(id)
 		out = append(out, s.listingViewLocked(id, l))
 	}
-	writeJSON(w, http.StatusOK, map[string][]listingView{"listings": out})
+	return out, page.Next, nil
 }
 
 // handleGetListing serves one listing. Public.
