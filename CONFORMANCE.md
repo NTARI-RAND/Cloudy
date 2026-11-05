@@ -80,8 +80,8 @@ See `docs/signed-claim-export.md` for the format and verification boundaries.
 
 Public hardware-offer browsing supports exact maker-key and signed accepted-rail
 filters, plus opt-in bounded append-order pages. Repeated rails match any selected
-rail; category and maker filters combine with that selection. The maker remains
-the same platform member identity. These are structural discovery controls:
+rail; category and maker filters combine with that selection. Maker keys are
+the existing platform member keys. These are structural discovery controls:
 credit acceptance does not switch the economy out of escrow or authorize a
 credit spend. No narrative, scoring, promotion or settlement authority is added.
 Bindings: `internal/market/browse.go`, `internal/consumerapi/market_query.go`, and
