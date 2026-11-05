@@ -32,6 +32,11 @@ func (c *Catalog) Browse(q ListingQuery) (ListingPage, error) {
 	if q.Start < 0 || q.Start > len(c.log) || q.Limit < 0 {
 		return ListingPage{}, errors.New("market: invalid listing page bounds")
 	}
+	return c.browse(q), nil
+}
+
+// browse shares traversal with queries whose bounds are valid by construction.
+func (c *Catalog) browse(q ListingQuery) ListingPage {
 	page := ListingPage{}
 	for pos := q.Start; pos < len(c.log); pos++ {
 		l := c.log[pos].Listing
@@ -39,13 +44,13 @@ func (c *Catalog) Browse(q ListingQuery) (ListingPage, error) {
 			continue
 		}
 		if q.Limit > 0 && len(page.IDs) == q.Limit {
-			return page, nil
+			return page
 		}
 		page.IDs = append(page.IDs, l.ID())
 		page.Next = pos + 1
 	}
 	page.Next = 0
-	return page, nil
+	return page
 }
 
 func (q ListingQuery) matches(l Listing) bool {
