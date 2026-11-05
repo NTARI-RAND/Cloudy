@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,23 @@ func TestMarketplaceBrowseFilters(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// Renaming or replacing a summary field must fail even if its field count stays nine.
+func TestMarketplaceBrowseSummaryFields(t *testing.T) {
+	s := browseServer(t)
+	browseListing(t, s, 1, market.CategoryComputer, market.AcceptedRails{Fiat: true})
+	_, page := browseIDs(t, s, "?category=computer&limit=1")
+	row := page["listings"].([]any)[0].(map[string]any)
+	fields := make([]string, 0, len(row))
+	for field := range row {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	want := []string{"accept_fiat", "accept_member_credit", "category", "listed_at", "listing_id", "maker", "platform", "sales_count", "spec"}
+	if !reflect.DeepEqual(fields, want) {
+		t.Fatalf("summary fields = %v, want %v", fields, want)
 	}
 }
 
