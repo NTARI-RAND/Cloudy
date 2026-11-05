@@ -167,7 +167,7 @@ func TestMarketplaceBrowseRejectsMalformedFilters(t *testing.T) {
 	const makerParameter = "maker="
 	for _, query := range []string{
 		"category=tomato", "category=computer&category=smart_tv", makerParameter, "maker=zz", makerParameter + strings.Repeat("ab", 31),
-		makerParameter + strings.Repeat("ab", 33), "maker=aa&maker=bb", "rail=", "rail=credit", "rail=fiat,member_credit",
+		makerParameter + strings.Repeat("ab", 33), makerParameter + strings.Repeat("ab", 32) + "&maker=" + strings.Repeat("cd", 32), "rail=", "rail=credit", "rail=fiat,member_credit",
 		"limit=", "limit=0", "limit=-1", "limit=101", "limit=1junk", "limit=%2B1", "limit=1&limit=2",
 		"cursor=", "cursor=-1", "cursor=1.0", "cursor=1junk", "cursor=%201", "cursor=999999999999999999999999", "cursor=1", "cursor=0&cursor=0",
 		"category=computer%ZZ",
