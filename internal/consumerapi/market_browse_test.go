@@ -128,7 +128,7 @@ func TestMarketplaceBrowsePagesAcrossSalesAndAppends(t *testing.T) {
 	_ = browseListing(t, s, 1, market.CategorySmartTV, market.AcceptedRails{Fiat: true})
 	b := browseListing(t, s, 2, market.CategoryComputer, market.AcceptedRails{Fiat: true})
 	first, page := browseIDs(t, s, "?category=computer&limit=1")
-	if !reflect.DeepEqual(first, []string{a}) || page["next_cursor"] != "1" {
+	if !reflect.DeepEqual(first, []string{a}) || page["next_cursor"] != hx(s.logID[:])+":1" {
 		t.Fatalf("first page: %v", page)
 	}
 	row := page["listings"].([]any)[0].(map[string]any)
@@ -136,11 +136,11 @@ func TestMarketplaceBrowsePagesAcrossSalesAndAppends(t *testing.T) {
 		t.Fatalf("summary fields changed: %v", row)
 	}
 	c := browseListing(t, s, 1, market.CategoryComputer, market.AcceptedRails{MemberCredit: true})
-	second, page := browseIDs(t, s, "?category=computer&limit=1&cursor=1")
-	if !reflect.DeepEqual(second, []string{b}) || page["next_cursor"] != "4" {
+	second, page := browseIDs(t, s, "?category=computer&limit=1&cursor="+page["next_cursor"].(string))
+	if !reflect.DeepEqual(second, []string{b}) || page["next_cursor"] != hx(s.logID[:])+":4" {
 		t.Fatalf("second page: %v", page)
 	}
-	last, page := browseIDs(t, s, "?category=computer&limit=1&cursor=4")
+	last, page := browseIDs(t, s, "?category=computer&limit=1&cursor="+page["next_cursor"].(string))
 	if !reflect.DeepEqual(last, []string{c}) || page["next_cursor"] != nil {
 		t.Fatalf("last page: %v", page)
 	}

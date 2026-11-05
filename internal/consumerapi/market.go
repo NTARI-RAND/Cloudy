@@ -146,7 +146,7 @@ func (s *Server) listingViewLocked(id market.ListingID, l market.Listing) listin
 // handleBrowseListings returns public, append-ordered structural summaries.
 // limit or cursor opts into bounded pages; existing unpaged reads stay compatible.
 func (s *Server) handleBrowseListings(w http.ResponseWriter, r *http.Request) {
-	query, paged, err := parseMarketQuery(r.URL.RawQuery)
+	query, paged, err := s.parseMarketQuery(r.URL.RawQuery)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errMarketQuery.Error())
 		return
@@ -161,7 +161,7 @@ func (s *Server) handleBrowseListings(w http.ResponseWriter, r *http.Request) {
 		NextCursor string        `json:"next_cursor,omitempty"`
 	}{Listings: out}
 	if paged && next != 0 {
-		response.NextCursor = strconv.Itoa(next)
+		response.NextCursor = hx(s.logID[:]) + ":" + strconv.Itoa(next)
 	}
 	writeJSON(w, http.StatusOK, response)
 }

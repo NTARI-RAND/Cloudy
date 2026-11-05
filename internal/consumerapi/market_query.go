@@ -5,13 +5,14 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/NTARI-RAND/Cloudy/internal/market"
 )
 
 var errMarketQuery = errors.New("invalid marketplace query")
 
-func parseMarketQuery(raw string) (market.ListingQuery, bool, error) {
+func (s *Server) parseMarketQuery(raw string) (market.ListingQuery, bool, error) {
 	values, err := url.ParseQuery(raw)
 	if err != nil {
 		return market.ListingQuery{}, false, errMarketQuery
@@ -27,7 +28,7 @@ func parseMarketQuery(raw string) (market.ListingQuery, bool, error) {
 	}
 	paged := values.Has("limit") || values.Has("cursor")
 	if paged {
-		q.Limit, q.Start, err = marketPageBounds(values)
+		q.Limit, q.Start, err = marketPageBounds(values, hx(s.logID[:]))
 	}
 	return q, paged, err
 }
@@ -57,7 +58,7 @@ func marketFilters(values url.Values) (market.ListingQuery, error) {
 	return q, nil
 }
 
-func marketPageBounds(values url.Values) (int, int, error) {
+func marketPageBounds(values url.Values, instance string) (int, int, error) {
 	limit, start := 50, 0
 	var err error
 	if values.Has("limit") {
@@ -67,7 +68,7 @@ func marketPageBounds(values url.Values) (int, int, error) {
 		}
 	}
 	if values.Has("cursor") {
-		start, err = marketPageNumber(values.Get("cursor"))
+		start, err = marketCursorPosition(values.Get("cursor"), instance)
 	}
 	return limit, start, err
 }
@@ -83,4 +84,15 @@ func marketPageNumber(value string) (int, error) {
 	}
 	n, err := strconv.Atoi(value)
 	return n, err
+}
+
+func marketCursorPosition(cursor, instance string) (int, error) {
+	if cursor == "0" {
+		return 0, nil
+	}
+	prefix, position, ok := strings.Cut(cursor, ":")
+	if !ok || prefix != instance {
+		return 0, errMarketQuery
+	}
+	return marketPageNumber(position)
 }

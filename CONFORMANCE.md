@@ -87,7 +87,9 @@ credit spend. No narrative, scoring, promotion or settlement authority is added.
 Bindings: `internal/market/browse.go`, `internal/consumerapi/market_query.go`, and
 `TestMarketplaceBrowseFilters`, `TestMarketplaceBrowsePagesAcrossSalesAndAppends`,
 `TestMarketplaceBrowseRejectsMalformedFilters`,
-`TestMarketplaceBrowseLegacyAndEmptyCategory`, `TestMarketplaceBrowsePageBounds`.
+`TestMarketplaceBrowseLegacyAndEmptyCategory`, `TestMarketplaceBrowsePageBounds`,
+and `TestMarketplaceBrowseRejectsCursorFromPreviousInstance`. Continuation tokens
+bind append positions to the running instance's log ID; stale tokens return 400.
 Pages avoid full-log/category/sales-history copies, but sparse filters can scan
 the remaining catalogue. Existing unpaged reads remain unbounded; in-memory,
 single-writer and witnessing limitations remain unchanged. See

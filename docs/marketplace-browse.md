@@ -39,8 +39,9 @@ An exhausted page can contain an empty array and has no continuation token:
 ```
 
 `listings` contains the same summary fields as before. When more matching
-offers exist, `next_cursor` is a decimal string pointing after the last returned
-listing in the catalogue log. Follow it with the same category, maker, rail
+offers exist, `next_cursor` contains the running instance's log ID and a decimal
+append position, separated by `:` (for example, `<64-hex-log-id>:125`). It points
+after the last returned listing in the catalogue log. Follow it with the same category, maker, rail
 selection and page limit. Treat it as a continuation token, not a result count:
 sales and nonmatching listings also occupy log positions. Exhausted pages omit
 `next_cursor`; `listings` is always an array, including for empty results.
@@ -49,8 +50,11 @@ Append positions stay stable as offers and sales are appended. Pagination is
 live, not a frozen snapshot: later requests may include new offers and updated
 sales counts. A cursor equal to the current log length returns an empty page;
 a cursor beyond the current log length is invalid. Cursors are local to this
-in-memory catalogue instance, not portable durable bookmarks. After a restart,
-start a fresh traversal. Changing filters also starts a fresh traversal.
+in-memory catalogue instance, not portable durable bookmarks. Tokens from another
+instance or a previous run return HTTP 400, even when their position would fit
+the current log. After a restart, start a fresh traversal with `cursor=0` or omit
+the cursor on a limited request. Bare decimal continuations other than the
+bootstrap value `0` are rejected. Changing filters also starts a fresh traversal.
 
 Each request snapshots its summaries under the existing server lock and writes
 the response after unlocking. Bounded reads allocate for the page, without
@@ -64,8 +68,8 @@ remain unbounded and preserve the `{"listings": [...]}` response shape.
 Malformed URL query encoding, invalid nonempty categories, malformed/empty maker
 keys, unknown/empty rails, and repeated singleton parameters (`category`,
 `maker`, `limit`, `cursor`) return HTTP 400. Rails may repeat; duplicates do not
-duplicate offers. Comma-separated rail values are not supported. Page numbers
-must contain only ASCII decimal digits and fit a nonnegative Go `int`; signs,
+duplicate offers. Comma-separated rail values are not supported. Limits and cursor
+positions must contain only ASCII decimal digits and fit a nonnegative Go `int`; signs,
 whitespace, fractions, suffixes and overflow fail. Empty bounds fail rather than
 silently becoming defaults. Unknown unrelated query parameters remain ignored.
 
@@ -87,6 +91,7 @@ go test ./internal/consumerapi -run '^$' -bench '^BenchmarkMarketplaceBrowse$' -
 HTTP tests use real signed registration, product-spec claims, listing creation
 and the catalogue. They check filter conjunction and rail OR semantics, dual-rail
 offers, unknown keys, exact summary fields, sale-interleaved append cursors,
-continuation after appends, malformed requests, page limits and legacy behavior.
+continuation after appends, rejection after a server restart, malformed instance
+tokens, malformed requests, page limits and legacy behavior.
 The benchmark uses a ten-offer page against 100 and 1,000 stored offers. It
 measures local request allocations and time, not a production capacity guarantee.
