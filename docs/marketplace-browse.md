@@ -32,8 +32,10 @@ Supplying `limit` or `cursor` enables paged reads. `limit` must be 1–100; it
 defaults to 50 when only `cursor` is supplied. Start at `cursor=0` or omit the
 cursor on the first limited request.
 
+An exhausted page can contain an empty array and has no continuation token:
+
 ```json
-{"listings": [], "next_cursor": "125"}
+{"listings": []}
 ```
 
 `listings` contains the same summary fields as before. When more matching
