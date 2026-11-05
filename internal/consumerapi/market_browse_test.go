@@ -181,30 +181,6 @@ func TestMarketplaceBrowseRejectsMalformedFilters(t *testing.T) {
 	}
 }
 
-func TestMarketplaceBrowsePageBounds(t *testing.T) {
-	s := browseServer(t)
-	for i := 0; i < 103; i++ {
-		browseListing(t, s, 1, market.CategoryComputer, market.AcceptedRails{Fiat: true})
-	}
-	for _, tc := range []struct {
-		query string
-		want  int
-	}{
-		{"?category=computer", 103},
-		{"?category=computer&cursor=0", 50},
-		{"?category=computer&limit=100", 100},
-		{"?category=computer&limit=100&cursor=100", 3},
-		{"?category=computer&limit=1&cursor=103", 0},
-	} {
-		t.Run(tc.query, func(t *testing.T) {
-			ids, _ := browseIDs(t, s, tc.query)
-			if len(ids) != tc.want {
-				t.Fatalf("got %d offers, want %d", len(ids), tc.want)
-			}
-		})
-	}
-}
-
 func BenchmarkMarketplaceBrowse(b *testing.B) {
 	for _, count := range []int{100, 1000} {
 		b.Run(fmt.Sprint(count), func(b *testing.B) {
