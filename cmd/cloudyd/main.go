@@ -33,6 +33,9 @@ import (
 func main() {
 	addr := flag.String("addr", ":8088", "listen address for the consumer JSON API")
 	platform := flag.String("platform", "cloudy", "platform identity (scopes member ids and every artifact)")
+	limits := consumerapi.DefaultRequestLimits()
+	flag.Int64Var(&limits.StructuredBytes, "request-bytes", limits.StructuredBytes, "maximum encoded JSON body bytes for structural consumer API writes")
+	flag.Int64Var(&limits.ClaimBytes, "claim-request-bytes", limits.ClaimBytes, "maximum encoded JSON body bytes for claims including member-local narrative")
 	var rc relayConfig
 	flag.StringVar(&rc.Orchestrator, "orchestrator", "", "orchestrator base URL; when set, relay members' nodes to it (decision 0001)")
 	flag.StringVar(&rc.OperatorID, "operator-id", "", "operator id this frontend enrolled under (cloudy-enroll -slug)")
@@ -42,7 +45,7 @@ func main() {
 	flag.DurationVar(&rc.Poll, "relay-poll", 0, "poll the orchestrator at most once per node per this interval (default 30s)")
 	flag.Parse()
 
-	srv, err := consumerapi.NewServer(*platform)
+	srv, err := consumerapi.NewServerWithLimits(*platform, limits)
 	if err != nil {
 		log.Fatalf("cloudyd: constructing server: %v", err)
 	}

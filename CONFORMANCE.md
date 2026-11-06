@@ -77,3 +77,13 @@ signed-field tampering. The existing summary response remains unchanged.
 This proves signed authorship, not truth or independent witnessing; the
 Technology Tree remains its documented unwitnessed single-writer stand-in.
 See `docs/signed-claim-export.md` for the format and verification boundaries.
+
+The consumer API applies configurable deployment byte limits before all ten JSON
+write handlers. `internal/consumerapi/request_limits.go` bounds the complete
+encoded body before signature validation or any store mutation, while preserving
+accepted signed bytes and the existing commons/Locker separation. The HTTP and
+signed-artifact regressions in `request_limits_test.go` and
+`request_limits_boundary_test.go`, `request_limits_http_test.go` and
+`request_limits_io_test.go` bind this resource boundary. It is not a wire,
+settlement or covenant rule; public reads and `/v0/` relay traffic retain their
+existing contracts. See `docs/consumer-request-limits.md` for defaults and scope.
