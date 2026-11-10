@@ -51,45 +51,61 @@ func (s *storageExecutor) Run(_ context.Context, job contribute.AssignedJob) (co
 	}
 	switch op.Op {
 	case "store":
-		blob, err := base64.StdEncoding.DecodeString(op.Data)
-		if err != nil {
-			return contribute.Result{JobID: job.ID}, fmt.Errorf("storage: bad data: %w", err)
-		}
-		if len(blob) == 0 {
-			return contribute.Result{JobID: job.ID}, errors.New("storage: empty shard")
-		}
-		s.mu.Lock()
-		s.shards[op.ID] = blob
-		n := len(blob)
-		s.mu.Unlock()
-		return contribute.Result{JobID: job.ID, OK: true, Detail: fmt.Sprintf("stored %d opaque bytes for %s", n, op.ID)}, nil
+		return s.store(job.ID, op)
 	case "audit":
-		s.mu.Lock()
-		blob, ok := s.shards[op.ID]
-		s.mu.Unlock()
-		if !ok {
-			return contribute.Result{JobID: job.ID}, fmt.Errorf("storage: no shard %s", op.ID)
-		}
-		// In production the challenge table is precomputed on the member's
-		// device and only expected digests travel; here we build and check it
-		// in one place to exercise the primitive end to end.
-		table, err := storage.BuildChallengeTable(blob, s.audits, rand.Reader)
-		if err != nil {
-			return contribute.Result{JobID: job.ID}, err
-		}
-		ch, expected, err := table.Next()
-		if err != nil {
-			return contribute.Result{JobID: job.ID}, err
-		}
-		resp, err := storage.Respond(blob, ch)
-		if err != nil {
-			return contribute.Result{JobID: job.ID}, err
-		}
-		if !storage.VerifyProof(expected, resp) {
-			return contribute.Result{JobID: job.ID, OK: false, Detail: "possession proof did not verify"}, nil
-		}
-		return contribute.Result{JobID: job.ID, OK: true, Detail: fmt.Sprintf("possession proven for %s", op.ID)}, nil
+		return s.audit(job.ID, op.ID)
 	default:
 		return contribute.Result{JobID: job.ID}, fmt.Errorf("storage: unknown op %q", op.Op)
 	}
+}
+
+func (s *storageExecutor) store(jobID string, op storageOp) (contribute.Result, error) {
+	blob, err := base64.StdEncoding.DecodeString(op.Data)
+	if err != nil {
+		return contribute.Result{JobID: jobID}, fmt.Errorf("storage: bad data: %w", err)
+	}
+	if len(blob) == 0 {
+		return contribute.Result{JobID: jobID}, errors.New("storage: empty shard")
+	}
+	s.mu.Lock()
+	s.shards[op.ID] = blob
+	n := len(blob)
+	s.mu.Unlock()
+	return contribute.Result{JobID: jobID, OK: true, Detail: fmt.Sprintf("stored %d opaque bytes for %s", n, op.ID)}, nil
+}
+
+func (s *storageExecutor) audit(jobID, shardID string) (contribute.Result, error) {
+	s.mu.Lock()
+	blob, ok := s.shards[shardID]
+	s.mu.Unlock()
+	if !ok {
+		return contribute.Result{JobID: jobID}, fmt.Errorf("storage: no shard %s", shardID)
+	}
+	// In production the challenge table is precomputed on the member's
+	// device and only expected digests travel; here we build and check it
+	// in one place to exercise the primitive end to end.
+	verified, err := s.provePossession(blob)
+	if err != nil {
+		return contribute.Result{JobID: jobID}, err
+	}
+	if !verified {
+		return contribute.Result{JobID: jobID, OK: false, Detail: "possession proof did not verify"}, nil
+	}
+	return contribute.Result{JobID: jobID, OK: true, Detail: fmt.Sprintf("possession proven for %s", shardID)}, nil
+}
+
+func (s *storageExecutor) provePossession(blob []byte) (bool, error) {
+	table, err := storage.BuildChallengeTable(blob, s.audits, rand.Reader)
+	if err != nil {
+		return false, err
+	}
+	challenge, expected, err := table.Next()
+	if err != nil {
+		return false, err
+	}
+	response, err := storage.Respond(blob, challenge)
+	if err != nil {
+		return false, err
+	}
+	return storage.VerifyProof(expected, response), nil
 }
