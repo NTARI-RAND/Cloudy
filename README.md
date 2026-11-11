@@ -165,3 +165,9 @@ independent witnessing.
 AGPL-3.0-or-later.
 
 *Network Theory Applied Research Institute, Inc. — 501(c)(3) — EIN 92-3047136 — info@ntari.org*
+
+## Consumer API deployment limits
+
+The member-facing JSON write routes enforce configurable body limits before
+decoding or mutation. See [consumer request limits](docs/consumer-request-limits.md)
+for defaults, daemon flags and compatibility boundaries.
