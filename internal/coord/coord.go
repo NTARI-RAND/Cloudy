@@ -42,6 +42,14 @@ func Dial(baseURL string) *Client {
 // the caller, so this package stays free of the opcred/protocol operator
 // packages and models no policy.
 func DialAsOperator(baseURL string, decorate func(*http.Request) error) *Client {
+	return DialWith(baseURL, decorate)
+}
+
+// DialWith returns a client whose every request is passed through decorate
+// before it is sent — the operator credential (DialAsOperator) or a node's
+// request signature to its frontend (noderelay.NodeAuth). Fail-closed: a
+// request whose decoration fails is never sent.
+func DialWith(baseURL string, decorate func(*http.Request) error) *Client {
 	return &Client{
 		Coordinator: &httpjson.Client{
 			BaseURL: baseURL,

@@ -12,11 +12,10 @@
 // executor, and a demo presence Service.
 //
 // With -coordinator set, the agent lists itself, heartbeats, polls for work and
-// reports, over outbound calls only. The transport is the protocol's reference
-// HTTP+JSON client with no transport authentication: a production coordinator
-// (SoHoLINK) refuses it until one of the two named next steps lands — the
-// node's own SPIFFE SVID (direct), or the agent → cloudyd → /v0 operator relay.
-// Messages are already signed with the node key either way. The Docker/
+// reports, over outbound calls only. Per decision 0001 it talks to its
+// frontend: point -coordinator at cloudyd, which relays to the orchestrator
+// under the frontend's operator credential (internal/noderelay). Every request
+// carries the node's request signature, and every message its own signature. The Docker/
 // gopsutil port lands behind the executor seam without changing the loop.
 package main
 
@@ -41,6 +40,7 @@ import (
 
 	"github.com/NTARI-RAND/Cloudy/internal/contribute"
 	"github.com/NTARI-RAND/Cloudy/internal/coord"
+	"github.com/NTARI-RAND/Cloudy/internal/noderelay"
 )
 
 func main() {
@@ -49,7 +49,7 @@ func main() {
 		pinned    = flag.Bool("pinned", true, "pinned (dedicated) capacity; false = scavenged (idle-first)")
 		withSvc   = flag.Bool("service", true, "offer the demo presence service (requires -pinned)")
 		selftest  = flag.Bool("selftest", true, "run a store->audit->echo self-test and exit (ignored with -coordinator)")
-		coordURL  = flag.String("coordinator", "", "coordinator base URL; when set, run the agent → coordinator loop")
+		coordURL  = flag.String("coordinator", "", "your frontend's base URL (cloudyd); when set, run the agent → coordinator loop")
 		keyPath   = flag.String("node-key", "cloudy-node.key", "node ed25519 key file (hex seed); created with mode 0600 if missing")
 		coordPub  = flag.String("coordinator-key", "", "coordinator ed25519 public key (hex); assignments are verified against it")
 		class     = flag.String("class", string(listing.ClassStandard), "compute class: micro | standard | server")
@@ -183,8 +183,8 @@ func runLoop(ctx context.Context, agent *Agent, reg *contribute.Registry, log *s
 	default:
 		return fmt.Errorf("-class %q: want micro, standard or server", class)
 	}
-	log.Info("node key ready; the coordinator must enroll this public key",
-		"node", nodeID, "public_key", hex.EncodeToString(key.Public().(ed25519.PublicKey)))
+	log.Info("node key ready; your frontend must enroll this public key",
+		"node", nodeID, "public_key", base64.StdEncoding.EncodeToString(key.Public().(ed25519.PublicKey)))
 
 	if _, ok := reg.Service(); ok {
 		go func() {
@@ -194,8 +194,9 @@ func runLoop(ctx context.Context, agent *Agent, reg *contribute.Registry, log *s
 		}()
 	}
 	l := &Loop{
-		Agent: agent, Coord: coord.Dial(coordURL), Node: identity.NodeID(nodeID),
-		Key: key, CoordKey: coordKey, Class: listing.ComputeClass(class),
+		Agent: agent, Coord: coord.DialWith(coordURL, noderelay.NodeAuth(identity.NodeID(nodeID), key, nil)),
+		Node: identity.NodeID(nodeID),
+		Key:  key, CoordKey: coordKey, Class: listing.ComputeClass(class),
 		Heartbeat: hb, Poll: poll, Log: log,
 	}
 	if err := l.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
