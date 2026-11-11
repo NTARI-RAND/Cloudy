@@ -94,3 +94,7 @@ Pages avoid full-log/category/sales-history copies, but sparse filters can scan
 the remaining catalogue. Existing unpaged reads remain unbounded; in-memory,
 single-writer and witnessing limitations remain unchanged. See
 `docs/marketplace-browse.md` for query syntax and compatibility limits.
+
+### Signed reference discovery
+
+`GET /api/v1/claims/{id}/references` exposes accepted structural edges in append order, with bounded pages and complete signed fields. Decimal-string nanoseconds preserve independent signature verification; no narrative is included and no relationship becomes a truth score. `TestReferenceDiscoveryPages`, `TestReferenceDiscoveryEmptyAndAppend`, `TestReferenceDiscoveryBounds`, and `TestReferenceDiscoveryValidation` bind filtering, cursor stability, signature/precision preservation, privacy, and invalid-input behavior. This additive read does not change the techtree's single-writer stand-in status.
