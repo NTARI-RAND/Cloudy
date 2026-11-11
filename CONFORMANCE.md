@@ -56,7 +56,7 @@ Tests that bind an ID from the Janus invariant registry (`jfa-conformance-suite.
 - **Covenant trust gate not yet wired.** Covenant and economy are built on main and bound to registry tests (see above). The one open half is the covenant's "gates whether": no spend path yet consults a member's standing before admitting a trade on trust. "Never how much" is enforced; "whether" is a named gap, not a claim.
 - **Record domain-tag rename** (product naming) is pending and must land **before any durable persistence** — retagging after durable logs exist would be a rewrite.
 - **Named record residuals** (steganographic floor, timestamp covert channel, witness amnesia, liveness gap) are documented in the record package doc rather than pretended away.
-- **Contributor node — Executor seam built; runtime implementations pending.** `internal/contribute` fixes the node-contribution contract (Executor / ServiceExecutor / Registry / NodeContract) with two invariants enforced by tests: a scavenged node accepts only preemptible executors (owner-never-interrupted), and a Service workload requires pinned placement. `cmd/cloudy-agent` runs it end to end with a **real** Storage executor (opaque sealed shards + the `internal/storage` proof-of-possession) and **placeholder** Compute/Service executors. The **agent → coordinator loop is built** (`cmd/cloudy-agent/loop.go`, run with `-coordinator`): it lists the node, heartbeats, polls, runs accepted work through the seam, and reports or declines every assignment exactly once, all signed with the node's ed25519 key (`-node-key`, created mode 0600); assignments are verified against the coordinator's key (`-coordinator-key`) and a forged one is declined, never run; opt-out is enforced locally (SPEC §5.1); a scavenged node re-lists as offering nothing when its owner returns. **Stand-in, named:** its transport is the reference HTTP+JSON client with no transport authentication, which a production coordinator refuses. Decided 2026-10-27 ([decision 0001](docs/decisions/0001-node-connects-through-its-frontend.md)): the next step is the agent→cloudyd→`/v0` operator relay; the direct SPIFFE route stays available. Storage has no opt-in flag in the pinned protocol (v0.1.0), so storage work is accepted or declined locally only. The heavy runtime port from the coordinator's transitional `internal/agent` — Docker executor, gopsutil hardware sampling, opt-out/allowlist/printers — lands *behind* the executor seam without changing the loop.
+- **Contributor node — Executor seam built; runtime implementations pending.** `internal/contribute` fixes the node-contribution contract (Executor / ServiceExecutor / Registry / NodeContract) with two invariants enforced by tests: a scavenged node accepts only preemptible executors (owner-never-interrupted), and a Service workload requires pinned placement. `cmd/cloudy-agent` runs it end to end with a **real** Storage executor (opaque sealed shards + the `internal/storage` proof-of-possession) and **placeholder** Compute/Service executors. The **agent → coordinator loop is built** (`cmd/cloudy-agent/loop.go`, run with `-coordinator`): it lists the node, heartbeats, polls, runs accepted work through the seam, and reports or declines every assignment exactly once, all signed with the node's ed25519 key (`-node-key`, created mode 0600); assignments are verified against the coordinator's key (`-coordinator-key`) and a forged one is declined, never run; opt-out is enforced locally (SPEC §5.1); a scavenged node re-lists as offering nothing when its owner returns. Per [decision 0001](docs/decisions/0001-node-connects-through-its-frontend.md) the agent talks to its frontend: **the node relay is built** (`internal/noderelay`, served on cloudyd's `/v0` routes with `-orchestrator`). Each agent request carries a node request signature (fresh, never replayed, bound to the node the call names); only enrolled nodes are relayed; every node message is verified and forwarded unchanged under the frontend's operator credential, so its signature still verifies at the orchestrator; heartbeats reach the orchestrator at most once a minute per node and polls at most once every 30 seconds; node keys are enrolled with the orchestrator through the operator (SoHoLINK `POST /nodes/pubkey`). The direct SPIFFE route stays available. **Named gaps:** SoHoLINK still creates a node's record only through its participant claim flow, which ties the node to a person at the orchestrator — decision 0001 needs an operator-scoped node registration there (SoHoLINK follow-up); cloudyd's enrolled nodes come from a file (`-nodes`) and live in memory, a stand-in for member-driven enrollment; with the roll-up, the orchestrator's view of a node can lag by up to one roll-up window. Storage has no opt-in flag in the pinned protocol (v0.1.0), so storage work is accepted or declined locally only. The heavy runtime port from the coordinator's transitional `internal/agent` — Docker executor, gopsutil hardware sampling, opt-out/allowlist/printers — lands *behind* the executor seam without changing the loop.
 - **Operator enrollment driver — built and live-verified.** `internal/enroll` + `cmd/cloudy-enroll` drive a coordinator's operator onboarding lifecycle end to end (apply → register the 7-key set → email verification → conformance suites A/B → automatic activation), reusing `internal/opcred` for key custody and for computing conformance answers through the real protocol canon. Suite C is graded coordinator-side and needs no operator response, so there is no suite-C step. The client is deliberately separate from `internal/coord`: enrollment is plain JSON on the coordinator's **portal** surface, not the `/v0` node-side wire. The out-of-band email code is supplied via an injected `CodeSource`. Verified against a live SoHoLINK coordinator — the enrolled operator reached `active` and its credential then authenticated on `/v0`.
 
 ## Dependency declaration
@@ -66,6 +66,34 @@ Consumes `sohocloud-protocol` at a published version tag — nothing else from t
 ## Product-specific notes (last, per the ordering rule)
 
 Cloudy ships as a standalone consumer product (its own member API and app surfaces, in review). SoHoLINK is the reference coordinator it speaks to; any conformant coordinator may replace it.
+
+The public claim export (`GET /api/v1/claims/{id}/export`) returns the complete
+existing signed Technology Tree claim, including hashes, nonce, signature and
+an exact decimal-string nanosecond instant. It has no narrative fields and
+reads no Locker content. Bindings: `internal/consumerapi/claim_export.go` and
+`TestClaimExportVerifiesOfflineWithoutNarrative`, which reconstructs the
+artifact from the downloaded bytes, verifies its signature/ID and rejects
+signed-field tampering. The existing summary response remains unchanged.
+This proves signed authorship, not truth or independent witnessing; the
+Technology Tree remains its documented unwitnessed single-writer stand-in.
+See `docs/signed-claim-export.md` for the format and verification boundaries.
+
+Public hardware-offer browsing supports exact maker-key and signed accepted-rail
+filters, plus opt-in bounded append-order pages. Repeated rails match any selected
+rail; category and maker filters combine with that selection. Maker keys are
+the existing platform member keys. These are structural discovery controls:
+credit acceptance does not switch the economy out of escrow or authorize a
+credit spend. No narrative, scoring, promotion or settlement authority is added.
+Bindings: `internal/market/browse.go`, `internal/consumerapi/market_query.go`, and
+`TestMarketplaceBrowseFilters`, `TestMarketplaceBrowsePagesAcrossSalesAndAppends`,
+`TestMarketplaceBrowseRejectsMalformedFilters`,
+`TestMarketplaceBrowseLegacyAndEmptyCategory`, `TestMarketplaceBrowsePageBounds`,
+and `TestMarketplaceBrowseRejectsCursorFromPreviousInstance`. Continuation tokens
+bind append positions to the running instance's log ID; stale tokens return 400.
+Pages avoid full-log/category/sales-history copies, but sparse filters can scan
+the remaining catalogue. Existing unpaged reads remain unbounded; in-memory,
+single-writer and witnessing limitations remain unchanged. See
+`docs/marketplace-browse.md` for query syntax and compatibility limits.
 
 ### Witness key-file custody
 

@@ -1,8 +1,8 @@
 package consumerapi
 
 import (
-	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/NTARI-RAND/Cloudy/internal/record"
@@ -123,7 +123,11 @@ func (s *Server) handleLifecycleConsistency(w http.ResponseWriter, r *http.Reque
 func (s *Server) serveConsistency(w http.ResponseWriter, r *http.Request, prove func(uint64) ([]record.Hash, uint64, error)) {
 	var from uint64
 	if q := r.URL.Query().Get("from"); q != "" {
-		if _, err := fmt.Sscanf(q, "%d", &from); err != nil {
+		// Parse the entire decimal value; signs, whitespace, and suffixes are
+		// not tree sizes. Omitted and empty values retain the zero default.
+		var err error
+		from, err = strconv.ParseUint(q, 10, 64)
+		if err != nil {
 			writeErr(w, http.StatusBadRequest, "from must be a non-negative integer")
 			return
 		}

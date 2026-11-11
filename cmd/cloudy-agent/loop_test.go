@@ -24,6 +24,7 @@ import (
 
 	"github.com/NTARI-RAND/Cloudy/internal/contribute"
 	"github.com/NTARI-RAND/Cloudy/internal/coord"
+	"github.com/NTARI-RAND/Cloudy/internal/noderelay"
 )
 
 // fakeCoord is a coordinator that checks what a real one checks — every node
@@ -330,5 +331,52 @@ func TestNodeKeyFile(t *testing.T) {
 	}
 	if _, err := loadOrCreateKey(bad); err == nil {
 		t.Error("a malformed key file was accepted")
+	}
+}
+
+// The agent reaches its orchestrator through its frontend (decision 0001):
+// agent → frontend relay → orchestrator. Here the orchestrator is the
+// frontend's own, in-process — the case of a platform outside the Antare
+// federation — and the full lifecycle still works, with the node's signatures
+// intact at the orchestrator and heartbeats rolled up on the way.
+func TestLoopThroughFrontendRelay(t *testing.T) {
+	l, fc := harness(t, contribute.Pinned, nil)
+	ctx := context.Background()
+
+	relay := &noderelay.Relay{Upstream: fc}
+	if err := relay.Enroll(ctx, l.Node, l.Key.Public().(ed25519.PublicKey)); err != nil {
+		t.Fatal(err)
+	}
+	front := httptest.NewServer(relay.Handler())
+	defer front.Close()
+	l.Coord = coord.DialWith(front.URL, noderelay.NodeAuth(l.Node, l.Key, nil))
+
+	if err := l.List(ctx); err != nil {
+		t.Fatalf("List through the frontend: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := l.Beat(ctx); err != nil {
+			t.Fatalf("Beat through the frontend: %v", err)
+		}
+	}
+	fc.assign(l.Node, "r1", "compute", "via-frontend")
+	fc.assign(l.Node, "r2", "print")
+	if err := l.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce through the frontend: %v", err)
+	}
+	if r, ok := fc.reports["r1"]; !ok || r.ExitCode != 0 {
+		t.Errorf("r1 report at the orchestrator: %+v (present %v)", r, ok)
+	}
+	if _, ok := fc.declines["r2"]; !ok {
+		t.Error("r2 decline did not reach the orchestrator")
+	}
+	if fc.beats != 1 {
+		t.Errorf("orchestrator saw %d heartbeats for 3 inside one window, want 1 (rolled up)", fc.beats)
+	}
+
+	// Without the node's request signature the frontend refuses the agent.
+	l.Coord = coord.Dial(front.URL)
+	if err := l.PollOnce(ctx); err == nil {
+		t.Error("the frontend served a node that did not sign its request")
 	}
 }
