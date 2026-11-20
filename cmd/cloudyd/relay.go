@@ -25,7 +25,7 @@ type relayConfig struct {
 	Orchestrator string        // orchestrator base URL; empty disables the relay
 	OperatorID   string        // the operator slug the credential was enrolled under
 	KeysDir      string        // the operator's 7 key-seed files (cloudy-enroll -keys)
-	NodesFile    string        // lines of "<node-id> <base64 ed25519 public key>"
+	NodesFile    string        // lines of "<node-id> <base64 ed25519 public key>"; node IDs are lowercase UUIDs
 	Beat, Poll   time.Duration // roll-up windows; 0 = package defaults
 }
 
@@ -96,7 +96,11 @@ func readNodes(path string) ([]enrolledNode, error) {
 		if err != nil || len(pub) != ed25519.PublicKeySize {
 			return nil, fmt.Errorf("%s:%d: public key must be base64 of %d bytes", path, line, ed25519.PublicKeySize)
 		}
-		out = append(out, enrolledNode{id: identity.NodeID(fields[0]), pub: pub})
+		id := identity.NodeID(fields[0])
+		if !noderelay.ValidNodeID(id) {
+			return nil, fmt.Errorf("%s:%d: node ID %q must be a lowercase UUID (the agent creates one on first run; see its -node-id-file)", path, line, fields[0])
+		}
+		out = append(out, enrolledNode{id: id, pub: pub})
 	}
 	return out, sc.Err()
 }

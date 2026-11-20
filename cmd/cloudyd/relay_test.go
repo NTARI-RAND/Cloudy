@@ -21,15 +21,20 @@ func TestReadNodes(t *testing.T) {
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	b64 := base64.StdEncoding.EncodeToString(pub)
 	path := filepath.Join(t.TempDir(), "nodes")
-	good := "# enrolled nodes\n\nnode-1 " + b64 + "\n  node-2   " + b64 + "  \n"
+	const id1, id2 = "0b6c0b4e-2d4f-4a8e-9f3a-1c2d3e4f5a6b", "7d1e9c2a-5b3f-4e6d-8a1b-2c3d4e5f6a7b"
+	good := "# enrolled nodes\n\n" + id1 + " " + b64 + "\n  " + id2 + "   " + b64 + "  \n"
 	if err := os.WriteFile(path, []byte(good), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	nodes, err := readNodes(path)
-	if err != nil || len(nodes) != 2 || nodes[1].id != "node-2" || !nodes[1].pub.Equal(pub) {
+	if err != nil || len(nodes) != 2 || nodes[1].id != id2 || !nodes[1].pub.Equal(pub) {
 		t.Fatalf("readNodes = %+v, %v", nodes, err)
 	}
-	for _, bad := range []string{"node-1\n", "node-1 not-base64!\n", "node-1 " + b64 + " extra\n", "node-1 AAAA\n"} {
+	for _, bad := range []string{
+		id1 + "\n", id1 + " not-base64!\n", id1 + " " + b64 + " extra\n", id1 + " AAAA\n",
+		"node-1 " + b64 + "\n",                               // a short name: SoHoLINK registers nodes by UUID
+		"0B6C0B4E-2D4F-4A8E-9F3A-1C2D3E4F5A6B " + b64 + "\n", // not lowercase
+	} {
 		if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -52,7 +57,7 @@ func TestNewRelayEnrollsUnderOperatorCredential(t *testing.T) {
 	}
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	nodes := filepath.Join(t.TempDir(), "nodes")
-	if err := os.WriteFile(nodes, []byte("node-1 "+base64.StdEncoding.EncodeToString(pub)+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(nodes, []byte("0b6c0b4e-2d4f-4a8e-9f3a-1c2d3e4f5a6b "+base64.StdEncoding.EncodeToString(pub)+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -74,8 +79,8 @@ func TestNewRelayEnrollsUnderOperatorCredential(t *testing.T) {
 	if _, err := newRelay(context.Background(), cfg); err != nil {
 		t.Fatalf("newRelay: %v", err)
 	}
-	if len(enrolled) != 1 || enrolled[0] != "/nodes/pubkey node-1" {
-		t.Errorf("enrollments = %v, want node-1 at /nodes/pubkey", enrolled)
+	if len(enrolled) != 1 || enrolled[0] != "/operators/nodes 0b6c0b4e-2d4f-4a8e-9f3a-1c2d3e4f5a6b" {
+		t.Errorf("enrollments = %v, want the node at /operators/nodes", enrolled)
 	}
 	cfg.KeysDir = ""
 	if _, err := newRelay(context.Background(), cfg); err == nil {
