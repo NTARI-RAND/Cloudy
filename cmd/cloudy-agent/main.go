@@ -45,7 +45,8 @@ import (
 
 func main() {
 	var (
-		nodeID    = flag.String("node", "cloudy-node-0", "node identifier")
+		nodeFlag  = flag.String("node", "", "node ID; with -coordinator it must be a lowercase UUID (default: read from -node-id-file, created on first run)")
+		idPath    = flag.String("node-id-file", "cloudy-node.id", "file holding this machine's node ID (a random UUID, created on first run); used with -coordinator when -node is empty")
 		pinned    = flag.Bool("pinned", true, "pinned (dedicated) capacity; false = scavenged (idle-first)")
 		withSvc   = flag.Bool("service", true, "offer the demo presence service (requires -pinned)")
 		selftest  = flag.Bool("selftest", true, "run a store->audit->echo self-test and exit (ignored with -coordinator)")
@@ -60,6 +61,12 @@ func main() {
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
+	nodeID, err := resolveNodeID(*nodeFlag, *idPath, *coordURL != "")
+	if err != nil {
+		log.Error("node ID", "err", err)
+		os.Exit(1)
+	}
+
 	placement := contribute.Scavenged
 	kinds := []contribute.WorkloadKind{contribute.Compute, contribute.Storage}
 	if *pinned {
@@ -69,7 +76,7 @@ func main() {
 		}
 	}
 
-	reg, err := contribute.NewRegistry(contribute.NodeContract{NodeID: *nodeID, Placement: placement, Kinds: kinds})
+	reg, err := contribute.NewRegistry(contribute.NodeContract{NodeID: nodeID, Placement: placement, Kinds: kinds})
 	if err != nil {
 		log.Error("contract invalid", "err", err)
 		os.Exit(1)
@@ -92,12 +99,12 @@ func main() {
 	// ownerActive: no real hardware probe yet (that is the gopsutil port);
 	// pinned nodes are never gated, so this stub is correct for -pinned.
 	agent := NewAgent(reg, func() bool { return false }, log)
-	log.Info("cloudy-agent up", "node", *nodeID, "placement", placement.String(), "capabilities", capsToStrings(agent.Capabilities()))
+	log.Info("cloudy-agent up", "node", nodeID, "placement", placement.String(), "capabilities", capsToStrings(agent.Capabilities()))
 
 	if *coordURL != "" {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
-		if err := runLoop(ctx, agent, reg, log, *coordURL, *nodeID, *keyPath, *coordPub, *class, *hbEvery, *pollEvery); err != nil {
+		if err := runLoop(ctx, agent, reg, log, *coordURL, nodeID, *keyPath, *coordPub, *class, *hbEvery, *pollEvery); err != nil {
 			log.Error("coordinator loop", "err", err)
 			os.Exit(1)
 		}
@@ -203,6 +210,32 @@ func runLoop(ctx context.Context, agent *Agent, reg *contribute.Registry, log *s
 		return err
 	}
 	return nil
+}
+
+// resolveNodeID picks this machine's node ID. An explicit -node wins. Without
+// one, the coordinator loop uses the ID in idPath, creating a random UUID there
+// on first run so the machine keeps its ID across restarts; the local self-test
+// and service modes, which talk to no orchestrator, use a fixed label. With a
+// coordinator the ID must be a lowercase UUID, the form the orchestrator
+// registers nodes by (SoHoLINK POST /operators/nodes).
+func resolveNodeID(flagID, idPath string, withCoordinator bool) (string, error) {
+	if !withCoordinator {
+		if flagID == "" {
+			return "cloudy-node-0", nil
+		}
+		return flagID, nil
+	}
+	if flagID != "" {
+		if !noderelay.ValidNodeID(identity.NodeID(flagID)) {
+			return "", fmt.Errorf("-node %q: with -coordinator the node ID must be a lowercase UUID; omit -node to use -node-id-file", flagID)
+		}
+		return flagID, nil
+	}
+	id, err := noderelay.LoadOrCreateNodeID(idPath)
+	if err != nil {
+		return "", err
+	}
+	return string(id), nil
 }
 
 // loadOrCreateKey reads the node's ed25519 seed (hex) from path, creating it
