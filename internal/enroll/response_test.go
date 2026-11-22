@@ -28,4 +28,20 @@ func TestTruncatedResponseFails(t *testing.T) {
 			}
 		})
 	}
+	t.Run("preserve conflict status", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(http.StatusConflict)
+			_, _ = io.WriteString(w, `{"error":"already enrolled"}`)
+		}))
+		defer server.Close()
+
+		err := NewClient(server.URL).do(context.Background(), http.MethodGet, "/response", nil, nil)
+		if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Errorf("truncated response error = %v, want unexpected EOF", err)
+		}
+		if got := Status(err); got != http.StatusConflict {
+			t.Errorf("Status(err) = %d, want 409 (err=%v)", got, err)
+		}
+	})
 }

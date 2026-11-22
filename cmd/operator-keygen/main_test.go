@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,24 +127,77 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestRunPrintsSavedKeysetWhenRootAlreadyExists(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "keys")
+	rootPath := filepath.Join(t.TempDir(), "root.seed")
+	if _, err := opcred.GenerateFileRoot(rootPath); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	err := run([]string{"-dir", dir, "-root", rootPath}, &out)
+	if !errors.Is(err, opcred.ErrRootFileExists) {
+		t.Fatalf("run error = %v, want root seed collision", err)
+	}
+	ks, err := opcred.LoadKeyset(dir)
+	if err != nil {
+		t.Fatalf("load saved keyset: %v", err)
+	}
+	for i, key := range ks.PublicKeys() {
+		line := fmt.Sprintf("  %d: %s\n", i, base64.StdEncoding.EncodeToString(key))
+		if !strings.Contains(out.String(), line) {
+			t.Errorf("output is missing saved public key %d", i)
+		}
+	}
+	hash := ks.Hash()
+	if !strings.Contains(out.String(), "keyset hash: "+base64.StdEncoding.EncodeToString(hash[:])+"\n") {
+		t.Error("output is missing saved keyset hash")
+	}
+}
+
 func TestRunReportsOutputFailure(t *testing.T) {
+	writeErr := errors.New("stdout failed")
 	for _, withRoot := range []bool{false, true} {
 		t.Run(map[bool]string{false: "keyset", true: "root"}[withRoot], func(t *testing.T) {
-			args := []string{"-dir", filepath.Join(t.TempDir(), "keys")}
+			dir := filepath.Join(t.TempDir(), "keys")
+			args := []string{"-dir", dir}
+			savedPath := dir
 			if withRoot {
-				args = append(args, "-root", filepath.Join(t.TempDir(), "output-failure.seed"))
+				savedPath = filepath.Join(t.TempDir(), "root.seed")
+				args = append(args, "-root", savedPath)
 			}
-			out, err := os.Open(os.DevNull)
-			if err != nil {
-				t.Fatal(err)
+			out := writerFunc(func(p []byte) (int, error) {
+				// Allow keyset output in the root case so the failure occurs
+				// while reporting the already-created root seed.
+				if withRoot {
+					if _, err := os.Stat(savedPath); errors.Is(err, os.ErrNotExist) {
+						return len(p), nil
+					}
+				}
+				return 0, writeErr
+			})
+			err := run(args, out)
+			if !errors.Is(err, writeErr) {
+				t.Fatalf("run error = %v, want stdout failure", err)
 			}
-			defer func() { _ = out.Close() }()
-			if err := run(args, out); err == nil {
-				t.Fatal("run succeeded with an unwritable output")
+			if _, err := opcred.LoadKeyset(dir); err != nil {
+				t.Fatalf("load saved keyset after stdout failure: %v", err)
+			}
+			if withRoot {
+				if _, err := opcred.LoadFileRoot(savedPath); err != nil {
+					t.Fatalf("load saved root after stdout failure: %v", err)
+				}
+			}
+			if !strings.Contains(err.Error(), savedPath) {
+				t.Errorf("run error = %v, want the saved location %s", err, savedPath)
 			}
 		})
 	}
 }
+
+type writerFunc func([]byte) (int, error)
+
+func (w writerFunc) Write(p []byte) (int, error) { return w(p) }
 
 // prefixForIndex is the printed line prefix for public key i.
 func prefixForIndex(i int) string {

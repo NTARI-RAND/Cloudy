@@ -111,7 +111,7 @@ type apiError struct {
 }
 
 // do performs a JSON request. reqBody nil sends no body; respBody nil discards
-// the response body. Non-2xx becomes an *HTTPError.
+// the response body. Non-2xx errors include an *HTTPError.
 func (c *Client) do(ctx context.Context, method, path string, reqBody, respBody any) error {
 	var body io.Reader
 	if reqBody != nil {
@@ -137,9 +137,9 @@ func (c *Client) do(ctx context.Context, method, path string, reqBody, respBody 
 }
 
 func decodeResponse(method, path string, resp *http.Response, respBody any) error {
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return fmt.Errorf("read %s %s response: %w", method, path, err)
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if readErr != nil {
+		readErr = fmt.Errorf("read %s %s response: %w", method, path, readErr)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		msg := strings.TrimSpace(string(raw))
@@ -147,7 +147,14 @@ func decodeResponse(method, path string, resp *http.Response, respBody any) erro
 		if json.Unmarshal(raw, &ae) == nil && ae.Err != "" {
 			msg = ae.Err
 		}
-		return &HTTPError{Method: method, Path: path, Status: resp.StatusCode, Msg: msg}
+		httpErr := &HTTPError{Method: method, Path: path, Status: resp.StatusCode, Msg: msg}
+		if readErr != nil {
+			return errors.Join(httpErr, readErr)
+		}
+		return httpErr
+	}
+	if readErr != nil {
+		return readErr
 	}
 	if respBody != nil && len(raw) > 0 {
 		if err := json.Unmarshal(raw, respBody); err != nil {

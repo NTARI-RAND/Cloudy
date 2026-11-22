@@ -60,6 +60,9 @@ func bootstrap(dir, rootPath string, stdout io.Writer) error {
 	}
 	hash := ks.Hash()
 	fmt.Fprintf(&output, "keyset hash: %s\n", base64.StdEncoding.EncodeToString(hash[:]))
+	if _, err := io.Copy(stdout, &output); err != nil {
+		return fmt.Errorf("keyset saved to %s, but printing its public keys failed: %w", dir, err)
+	}
 
 	if rootPath != "" {
 		root, err := opcred.GenerateFileRoot(rootPath)
@@ -68,7 +71,9 @@ func bootstrap(dir, rootPath string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(&output, "root seed written to %s (software stand-in for a device root)\n", rootPath)
 		fmt.Fprintf(&output, "root public key: %s\n", base64.StdEncoding.EncodeToString(root.PublicKey()))
+		if _, err := io.Copy(stdout, &output); err != nil {
+			return fmt.Errorf("root seed saved to %s, but printing its public key failed: %w", rootPath, err)
+		}
 	}
-	_, err = io.Copy(stdout, &output)
-	return err
+	return nil
 }
