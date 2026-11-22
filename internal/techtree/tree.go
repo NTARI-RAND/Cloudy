@@ -36,6 +36,7 @@ type Tree struct {
 	platform string
 	claims   map[ClaimID]Claim
 	refs     map[RefID]Reference
+	buildsOn map[ClaimID][]ClaimID // outgoing dependencies derived from accepted references
 	log      []Item
 	head     Hash
 }
@@ -53,6 +54,7 @@ func NewTree(platform string) (*Tree, error) {
 		platform: platform,
 		claims:   make(map[ClaimID]Claim),
 		refs:     make(map[RefID]Reference),
+		buildsOn: make(map[ClaimID][]ClaimID),
 	}, nil
 }
 
@@ -121,6 +123,9 @@ func (t *Tree) AddReference(r Reference) (RefID, error) {
 		return RefID{}, ErrDuplicate
 	}
 	t.refs[id] = cloneRef(r)
+	if r.Kind == RefBuildsOn {
+		t.buildsOn[r.From] = append(t.buildsOn[r.From], r.To)
+	}
 	t.log = append(t.log, Item{Reference: cloneRefPtr(r)})
 	t.fold(id[:])
 	return id, nil
@@ -128,29 +133,25 @@ func (t *Tree) AddReference(r Reference) (RefID, error) {
 
 // buildsOnReaches reports whether `start` can reach `target` by following
 // builds_on edges (start builds_on ... builds_on target). Used to reject a new
-// builds_on edge that would close a cycle. O(V+E) DFS over accepted edges.
+// builds_on edge that would close a cycle. O(V+E) over reachable vertices and
+// their outgoing dependencies.
 func (t *Tree) buildsOnReaches(start, target ClaimID) bool {
 	if start == target {
 		return true
 	}
-	seen := map[ClaimID]bool{}
+	seen := map[ClaimID]bool{start: true}
 	stack := []ClaimID{start}
 	for len(stack) > 0 {
 		n := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if seen[n] {
-			continue
-		}
-		seen[n] = true
-		for _, it := range t.log {
-			r := it.Reference
-			if r == nil || r.Kind != RefBuildsOn || r.From != n {
-				continue
-			}
-			if r.To == target {
+		for _, next := range t.buildsOn[n] {
+			if next == target {
 				return true
 			}
-			stack = append(stack, r.To)
+			if !seen[next] {
+				seen[next] = true
+				stack = append(stack, next)
+			}
 		}
 	}
 	return false
