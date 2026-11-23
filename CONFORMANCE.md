@@ -94,3 +94,7 @@ Pages avoid full-log/category/sales-history copies, but sparse filters can scan
 the remaining catalogue. Existing unpaged reads remain unbounded; in-memory,
 single-writer and witnessing limitations remain unchanged. See
 `docs/marketplace-browse.md` for query syntax and compatibility limits.
+
+### Witness key-file custody
+
+`witnessd -seed-file` checks regular-file type, effective-user ownership, owner-only permissions, and macOS extended ACLs on the opened file before reading a bounded hexadecimal seed. Unsupported platform/build access checks fail closed. `TestWitnessSeedFileIdentity`, `TestWitnessSeedFileRejectsUnsafeInput`, `TestWitnessSeedFileRejectsSymlink`, `TestWitnessSeedFileRejectsACL` (macOS), and `TestWitnessSeedCompatibility` bind stable public identity, startup refusal, private-material exclusion from diagnostics, and legacy/demo behavior. This persists key identity only: rollback memory remains ephemeral, trust on first checkpoint remains, and no federation or registry is introduced.

@@ -12,8 +12,6 @@
 package main
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/hex"
 	"flag"
 	"log"
@@ -28,23 +26,24 @@ func main() {
 	relayURL := flag.String("relay", "http://localhost:8090", "witness relay base URL")
 	intakeAddr := flag.String("intake", ":8091", "listen address for the filing intake")
 	interval := flag.Duration("interval", 30*time.Second, "poll interval")
-	seedHex := flag.String("seed", "", "hex ed25519 seed (32 bytes); ephemeral when empty — ephemeral witnesses forget, use a persistent seed in anything but a demo")
+	seedHex := flag.String("seed", "", "DEPRECATED: hex ed25519 seed; use -seed-file to keep secrets out of process arguments")
+	seedFile := flag.String("seed-file", "", "protected file containing 64 hex seed digits; Linux/macOS owner-only permissions required")
 	flag.Parse()
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "seed-file" && f.Value.String() == "" {
+			log.Fatal("witnessd: -seed-file must not be empty")
+		}
+	})
 
-	var priv ed25519.PrivateKey
-	if *seedHex == "" {
-		_, p, err := ed25519.GenerateKey(rand.Reader)
-		if err != nil {
-			log.Fatalf("witnessd: generating key: %v", err)
-		}
-		priv = p
-		log.Printf("witnessd: EPHEMERAL key (amnesia on restart is total); pass -seed for anything beyond a demo")
-	} else {
-		seed, err := hex.DecodeString(*seedHex)
-		if err != nil || len(seed) != ed25519.SeedSize {
-			log.Fatalf("witnessd: -seed must be %d hex bytes", ed25519.SeedSize)
-		}
-		priv = ed25519.NewKeyFromSeed(seed)
+	priv, err := witnessKey(*seedHex, *seedFile)
+	if err != nil {
+		log.Fatalf("witnessd: %v", err)
+	}
+	if *seedHex != "" {
+		log.Print("witnessd: -seed is deprecated; migrate to -seed-file to avoid process-argument and shell-history exposure")
+	}
+	if *seedHex == "" && *seedFile == "" {
+		log.Print("witnessd: EPHEMERAL key (amnesia on restart is total); use -seed-file for a persistent identity beyond a demo")
 	}
 
 	w := witnesskit.NewWorker(priv, *relayURL)
