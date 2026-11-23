@@ -165,3 +165,5 @@ independent witnessing.
 AGPL-3.0-or-later.
 
 *Network Theory Applied Research Institute, Inc. — 501(c)(3) — EIN 92-3047136 — info@ntari.org*
+
+Signed claim-reference discovery: see [reference discovery](docs/reference-discovery.md) for the public paginated API and offline verification fields.
