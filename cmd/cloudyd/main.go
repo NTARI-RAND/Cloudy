@@ -37,7 +37,7 @@ func main() {
 	flag.StringVar(&rc.Orchestrator, "orchestrator", "", "orchestrator base URL; when set, relay members' nodes to it (decision 0001)")
 	flag.StringVar(&rc.OperatorID, "operator-id", "", "operator id this frontend enrolled under (cloudy-enroll -slug)")
 	flag.StringVar(&rc.KeysDir, "operator-keys", "", "directory of the operator's 7 key-seed files (cloudy-enroll -keys)")
-	flag.StringVar(&rc.NodesFile, "nodes", "", "file of enrolled nodes: one \"<node-id> <base64 public key>\" per line")
+	flag.StringVar(&rc.NodesFile, "nodes", "", "file of enrolled nodes: one \"<node-id> <base64 public key>\" per line; node IDs are lowercase UUIDs")
 	flag.DurationVar(&rc.Beat, "relay-beat", 0, "forward at most one heartbeat per node per this interval (default 60s)")
 	flag.DurationVar(&rc.Poll, "relay-poll", 0, "poll the orchestrator at most once per node per this interval (default 30s)")
 	flag.Parse()

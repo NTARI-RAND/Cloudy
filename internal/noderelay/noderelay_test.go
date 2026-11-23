@@ -478,7 +478,7 @@ func TestEnrollFirstWriteWins(t *testing.T) {
 	var hdr string
 	status := http.StatusOK
 	orch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Path != "/nodes/pubkey" || req.Method != http.MethodPost {
+		if req.URL.Path != "/operators/nodes" || req.Method != http.MethodPost {
 			t.Errorf("enrollment went to %s %s", req.Method, req.URL.Path)
 		}
 		hdr = req.Header.Get(opcred.OperatorHeaderName)
@@ -492,30 +492,31 @@ func TestEnrollFirstWriteWins(t *testing.T) {
 	}
 	r := &Relay{Upstream: newOrchestrator(t), EnrollUpstream: EnrollViaOrchestrator(orch.URL, decorate)}
 
+	const nodeE, nodeF = "3f2b8c1e-6a4d-4b7e-9c1f-0a2b3c4d5e6f", "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
 	pub, _ := key(t)
 	ctx := context.Background()
-	if err := r.Enroll(ctx, "node-e", pub); err != nil {
+	if err := r.Enroll(ctx, nodeE, pub); err != nil {
 		t.Fatal(err)
 	}
 	if hdr != "operator-credential" {
 		t.Error("key enrollment was not sent under the operator credential")
 	}
-	if got["node_id"] != "node-e" || got["public_key"] != base64.StdEncoding.EncodeToString(pub) || got["algo"] != "ed25519" || len(got) != 3 {
+	if got["node_id"] != nodeE || got["public_key"] != base64.StdEncoding.EncodeToString(pub) || got["algo"] != "ed25519" || len(got) != 3 {
 		t.Errorf("enrollment body = %v, want exactly node_id, public_key and algo", got)
 	}
-	if err := r.Enroll(ctx, "node-e", pub); err != nil {
+	if err := r.Enroll(ctx, nodeE, pub); err != nil {
 		t.Errorf("re-enrolling the same key: %v", err)
 	}
 	other, _ := key(t)
-	if err := r.Enroll(ctx, "node-e", other); !errors.Is(err, ErrKeyConflict) {
+	if err := r.Enroll(ctx, nodeE, other); !errors.Is(err, ErrKeyConflict) {
 		t.Errorf("enrolling a different key = %v, want ErrKeyConflict", err)
 	}
 	status = http.StatusConflict
 	third, _ := key(t)
-	if err := r.Enroll(ctx, "node-f", third); !errors.Is(err, ErrKeyConflict) {
+	if err := r.Enroll(ctx, nodeF, third); !errors.Is(err, ErrKeyConflict) {
 		t.Errorf("orchestrator 409 = %v, want ErrKeyConflict", err)
 	}
-	if err := r.Enroll(ctx, "node-f", third); !errors.Is(err, ErrKeyConflict) {
+	if err := r.Enroll(ctx, nodeF, third); !errors.Is(err, ErrKeyConflict) {
 		t.Error("a node the orchestrator refused was enrolled locally anyway")
 	}
 }

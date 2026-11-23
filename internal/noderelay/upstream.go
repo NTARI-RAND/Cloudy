@@ -16,13 +16,20 @@ import (
 )
 
 // EnrollViaOrchestrator returns an EnrollUpstream function that registers a
-// node's public key with a SoHoLINK-style orchestrator (POST /nodes/pubkey),
-// authenticated by decorate — the operator credential. The orchestrator keeps
-// the first key it is given for a node; a different key is refused there too.
-// The body carries a node ID and a public key only: no person.
+// node with a SoHoLINK-style orchestrator (POST /operators/nodes), authenticated
+// by decorate — the operator credential. The orchestrator creates the node as
+// this operator's, with no person attached, and enrolls its key in the same
+// step; repeating the same node and key is harmless. The body carries a node
+// ID and a public key only: no person. The node ID must be a lowercase UUID
+// (ValidNodeID); anything else is refused here, before any network call.
+// A 409 means the orchestrator already holds this node with a different key,
+// or under another owner: either way nothing changed there (ErrKeyConflict).
 func EnrollViaOrchestrator(baseURL string, decorate func(*http.Request) error) func(context.Context, identity.NodeID, ed25519.PublicKey) error {
 	client := &http.Client{Timeout: 30 * time.Second}
 	return func(ctx context.Context, node identity.NodeID, pub ed25519.PublicKey) error {
+		if !ValidNodeID(node) {
+			return fmt.Errorf("node ID %q is not a lowercase UUID; the orchestrator registers nodes by UUID", node)
+		}
 		body, err := json.Marshal(map[string]string{
 			"node_id":    string(node),
 			"public_key": base64.StdEncoding.EncodeToString(pub),
@@ -31,7 +38,7 @@ func EnrollViaOrchestrator(baseURL string, decorate func(*http.Request) error) f
 		if err != nil {
 			return err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/nodes/pubkey", bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/operators/nodes", bytes.NewReader(body))
 		if err != nil {
 			return err
 		}
