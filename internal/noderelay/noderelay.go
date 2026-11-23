@@ -54,7 +54,7 @@ var (
 	ErrStaleSeq = errors.New("noderelay: Seq does not increase")
 	// ErrKeyConflict: a different key is already enrolled for the node, or the
 	// orchestrator holds the node under another owner.
-	ErrKeyConflict = errors.New("noderelay: a different key is already enrolled for this node")
+	ErrKeyConflict = errors.New("noderelay: node is already enrolled with a different key or owner")
 )
 
 // Defaults for the roll-up windows.

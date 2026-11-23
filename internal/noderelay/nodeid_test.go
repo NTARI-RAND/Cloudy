@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -46,6 +48,7 @@ func TestValidNodeID(t *testing.T) {
 		"3f2b8c1e-6a4d-4b7e-9c1f-0a2b3c4d5e6f0":  false, // long
 		"3f2b8c1e-6a4d-4b7e-9c1f-0a2b3c4d5e6g":   false, // not hex
 		"{3f2b8c1e-6a4d-4b7e-9c1f-0a2b3c4d5e6f}": false,
+		"3f2b8c1e6-a4d-4b7e-9c1f-0a2b3c4d5e6f":   false, // right length, hyphen moved
 	} {
 		if got := ValidNodeID(id); got != want {
 			t.Errorf("ValidNodeID(%q) = %v, want %v", id, got, want)
@@ -62,8 +65,12 @@ func TestLoadOrCreateNodeID(t *testing.T) {
 		t.Fatalf("first run = %q, %v", first, err)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("ID file mode = %v, %v; want 0600", info.Mode().Perm(), err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Windows reports 0666 for any writable file; the mode check is Unix-only.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("ID file mode = %v; want 0600", info.Mode().Perm())
 	}
 	again, err := LoadOrCreateNodeID(path)
 	if err != nil || again != first {
@@ -73,8 +80,11 @@ func TestLoadOrCreateNodeID(t *testing.T) {
 		if err := os.WriteFile(path, []byte(bad), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if id, err := LoadOrCreateNodeID(path); err == nil {
+		id, err := LoadOrCreateNodeID(path)
+		if err == nil {
 			t.Errorf("ID file %q accepted as %q", strings.TrimSpace(bad), id)
+		} else if !strings.Contains(err.Error(), "safe to delete") {
+			t.Errorf("damaged-file error %q does not say what to do", err)
 		}
 	}
 }
@@ -87,6 +97,9 @@ func TestEnrollViaOrchestrator_StatusesAndIDCheck(t *testing.T) {
 	orch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.WriteHeader(status)
+		if status == http.StatusConflict {
+			w.Write([]byte(`{"error":"node_id is already registered by someone else"}`)) //nolint:errcheck
+		}
 	}))
 	defer orch.Close()
 	enroll := EnrollViaOrchestrator(orch.URL, nil)
@@ -104,6 +117,13 @@ func TestEnrollViaOrchestrator_StatusesAndIDCheck(t *testing.T) {
 	status = http.StatusBadRequest
 	if err := enroll(ctx, id, pub); err == nil {
 		t.Error("400 from the orchestrator was treated as success")
+	}
+	// A 409 keeps the orchestrator's reason: "owned by someone else" must not
+	// read as a key mismatch.
+	status = http.StatusConflict
+	err := enroll(ctx, id, pub)
+	if !errors.Is(err, ErrKeyConflict) || !strings.Contains(err.Error(), "registered by someone else") {
+		t.Errorf("409 = %v; want ErrKeyConflict carrying the orchestrator's reason", err)
 	}
 
 	before := calls
