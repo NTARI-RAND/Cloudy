@@ -93,14 +93,14 @@ func capsKey(ks []contribute.WorkloadKind) string {
 func (l *Loop) List(ctx context.Context) error {
 	caps := l.Agent.Capabilities()
 	var opt listing.WorkloadOptIn
+	// Storage opt-in is not wired into this agent's advertisement; storage work
+	// is still accepted or declined locally.
 	for _, k := range caps {
 		switch k {
 		case contribute.Compute:
 			opt.Compute = true
 		case contribute.Print:
 			opt.Print = true
-			// Storage has no opt-in flag in the pinned protocol (v0.1.0):
-			// the node accepts or declines storage work locally either way.
 		}
 	}
 	cl := listing.CapabilityListing{
