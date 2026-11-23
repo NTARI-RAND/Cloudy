@@ -138,9 +138,8 @@ func (c *Catalog) Listing(id ListingID) (Listing, bool) {
 }
 
 // SalesOf returns the exchange refs recorded against a listing, in append
-// order. The composition root feeds these to the covenant to build the
-// per-product LBTAS distribution, and they are the listing's provenance for
-// secondary-market resale.
+// order. They are the listing's provenance for secondary-market resale;
+// SalesCount provides provenance depth without copying this history.
 func (c *Catalog) SalesOf(id ListingID) []ExchangeRef {
 	out := make([]ExchangeRef, len(c.sales[id]))
 	copy(out, c.sales[id])
@@ -152,16 +151,7 @@ func (c *Catalog) SalesOf(id ListingID) []ExchangeRef {
 // would be paid placement, which is off-architecture). A consumer applies its
 // own legible ordering (e.g. covenant distribution, citation weight, recency).
 func (c *Catalog) ByCategory(cat Category) []ListingID {
-	var out []ListingID
-	for _, it := range c.log {
-		if it.Listing == nil {
-			continue
-		}
-		if it.Listing.Category == cat {
-			out = append(out, it.Listing.ID())
-		}
-	}
-	return out
+	return c.browse(ListingQuery{Category: cat}).IDs
 }
 
 // Log returns the append-ordered log (defensive copies), for replay and

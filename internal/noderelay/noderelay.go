@@ -52,8 +52,9 @@ var (
 	// ErrStaleSeq: the Seq does not increase (SPEC §5.5); refused locally so a
 	// replay is never absorbed into the roll-up.
 	ErrStaleSeq = errors.New("noderelay: Seq does not increase")
-	// ErrKeyConflict: a different key is already enrolled for the node.
-	ErrKeyConflict = errors.New("noderelay: a different key is already enrolled for this node")
+	// ErrKeyConflict: a different key is already enrolled for the node, or the
+	// orchestrator holds the node under another owner.
+	ErrKeyConflict = errors.New("noderelay: node is already enrolled with a different key or owner")
 )
 
 // Defaults for the roll-up windows.
@@ -80,8 +81,9 @@ type Relay struct {
 	UpstreamPoll time.Duration // 0: DefaultUpstreamPoll
 	Now          func() time.Time
 
-	// EnrollUpstream, when set, registers a newly enrolled node's key with the
-	// orchestrator (SoHoLINK: POST /nodes/pubkey, operator-authenticated).
+	// EnrollUpstream, when set, registers a newly enrolled node and its key
+	// with the orchestrator (SoHoLINK: POST /operators/nodes,
+	// operator-authenticated, no person attached).
 	EnrollUpstream func(ctx context.Context, node identity.NodeID, pub ed25519.PublicKey) error
 
 	mu    sync.Mutex
