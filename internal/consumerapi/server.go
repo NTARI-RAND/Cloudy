@@ -60,7 +60,8 @@ const domainRegister = "cloudy/consumerapi/register/v0"
 // safe for concurrent use — a single mutex guards the in-memory stores and the
 // member-local narrative manifest, which is sufficient for slice 1.
 type Server struct {
-	platform string
+	platform      string
+	requestLimits RequestLimits
 
 	// The operator's ephemeral record-log keypair. The operator legitimately
 	// holds its own checkpoint-signing key — what it can never hold is a key
@@ -268,16 +269,17 @@ func NewServer(platform string) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		platform:     platform,
-		operatorPub:  operatorPub,
-		operatorPriv: operatorPriv,
-		byMember:     make(map[covenant.MemberID]ed25519.PublicKey),
-		byAccount:    make(map[economy.AccountID]ed25519.PublicKey),
-		tree:         tree,
-		catalog:      catalog,
-		locker:       record.NewMemLocker(),
-		index:        make(map[record.Hash]uint64),
-		manifest:     make(map[string]narrativeRefs),
+		platform:      platform,
+		requestLimits: DefaultRequestLimits(),
+		operatorPub:   operatorPub,
+		operatorPriv:  operatorPriv,
+		byMember:      make(map[covenant.MemberID]ed25519.PublicKey),
+		byAccount:     make(map[economy.AccountID]ed25519.PublicKey),
+		tree:          tree,
+		catalog:       catalog,
+		locker:        record.NewMemLocker(),
+		index:         make(map[record.Hash]uint64),
+		manifest:      make(map[string]narrativeRefs),
 	}
 	s.recStore = record.NewMemStore()
 	s.opLog, err = record.OpenLog(operatorPub, s.recStore)
@@ -329,30 +331,30 @@ func NewServer(platform string) (*Server, error) {
 // Handler returns the mounted HTTP router for the API.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/v1/members", s.handleRegister)
+	mux.HandleFunc("POST /api/v1/members", limitRequest(s.requestLimits.StructuredBytes, s.handleRegister))
 	mux.HandleFunc("GET /api/v1/members/{id}/standing", s.handleStanding)
-	mux.HandleFunc("POST /api/v1/claims", s.handleAnchorClaim)
+	mux.HandleFunc("POST /api/v1/claims", limitRequest(s.requestLimits.ClaimBytes, s.handleAnchorClaim))
 	mux.HandleFunc("GET /api/v1/claims/{id}", s.handleGetClaim)
 	mux.HandleFunc("GET /api/v1/claims/{id}/export", s.handleExportClaim)
-	mux.HandleFunc("POST /api/v1/references", s.handleAddReference)
+	mux.HandleFunc("POST /api/v1/references", limitRequest(s.requestLimits.StructuredBytes, s.handleAddReference))
 	mux.HandleFunc("GET /api/v1/market/categories", s.handleCategories)
-	mux.HandleFunc("POST /api/v1/market/listings", s.handleCreateListing)
+	mux.HandleFunc("POST /api/v1/market/listings", limitRequest(s.requestLimits.StructuredBytes, s.handleCreateListing))
 	mux.HandleFunc("GET /api/v1/market/listings", s.handleBrowseListings)
 	mux.HandleFunc("GET /api/v1/market/listings/{id}", s.handleGetListing)
 	mux.HandleFunc("GET /api/v1/drops/log", s.handleDropsLog)
 	mux.HandleFunc("GET /api/v1/drops/checkpoints", s.handleDropsCheckpoints)
-	mux.HandleFunc("POST /api/v1/drops", s.handleAppendDrop)
+	mux.HandleFunc("POST /api/v1/drops", limitRequest(s.requestLimits.StructuredBytes, s.handleAppendDrop))
 	mux.HandleFunc("GET /api/v1/drops/{id}", s.handleGetDrop)
 	mux.HandleFunc("GET /api/v1/credit/policy", s.handleCreditPolicy)
 	mux.HandleFunc("GET /api/v1/credit/accounts/{id}/balance", s.handleBalance)
 	mux.HandleFunc("GET /api/v1/credit/accounts/{id}/history", s.handleHistory)
-	mux.HandleFunc("POST /api/v1/credit/spends", s.handlePostSpend)
-	mux.HandleFunc("POST /api/v1/assessments", s.handleRecordAssessment)
-	mux.HandleFunc("POST /api/v1/assessments/{id}/answers", s.handleAnswerAssessment)
+	mux.HandleFunc("POST /api/v1/credit/spends", limitRequest(s.requestLimits.StructuredBytes, s.handlePostSpend))
+	mux.HandleFunc("POST /api/v1/assessments", limitRequest(s.requestLimits.StructuredBytes, s.handleRecordAssessment))
+	mux.HandleFunc("POST /api/v1/assessments/{id}/answers", limitRequest(s.requestLimits.StructuredBytes, s.handleAnswerAssessment))
 	mux.HandleFunc("GET /api/v1/assessments/{id}/answer", s.handleGetAnswer)
-	mux.HandleFunc("POST /api/v1/disputes", s.handleOpenDispute)
+	mux.HandleFunc("POST /api/v1/disputes", limitRequest(s.requestLimits.StructuredBytes, s.handleOpenDispute))
 	mux.HandleFunc("GET /api/v1/disputes/{id}", s.handleGetDispute)
-	mux.HandleFunc("POST /api/v1/disputes/{id}/withdraw", s.handleWithdrawDispute)
+	mux.HandleFunc("POST /api/v1/disputes/{id}/withdraw", limitRequest(s.requestLimits.StructuredBytes, s.handleWithdrawDispute))
 	mux.HandleFunc("GET /api/v1/lifecycle/checkpoints", s.handleLifecycleCheckpoints)
 	mux.HandleFunc("GET /api/v1/drops/checkpoints/consistency", s.handleDropsConsistency)
 	mux.HandleFunc("GET /api/v1/lifecycle/checkpoints/consistency", s.handleLifecycleConsistency)
