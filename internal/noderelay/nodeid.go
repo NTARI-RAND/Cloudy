@@ -75,7 +75,7 @@ func LoadOrCreateNodeID(path string) (identity.NodeID, error) {
 	}
 	id := identity.NodeID(strings.TrimSpace(string(data)))
 	if !ValidNodeID(id) {
-		return "", fmt.Errorf("node ID file %s: want one lowercase UUID", path)
+		return "", fmt.Errorf("node ID file %s: want one lowercase UUID; if it is empty or cut short (an interrupted first run), that ID was never registered and the file is safe to delete", path)
 	}
 	return id, nil
 }

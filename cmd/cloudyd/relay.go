@@ -74,7 +74,10 @@ type enrolledNode struct {
 
 // readNodes parses the nodes file: one "<node-id> <base64 public key>" per
 // line; blank lines and lines starting with # are skipped. It holds machine
-// IDs and public keys only — never anything that names a person.
+// IDs and public keys only — never anything that names a person. Node IDs
+// are lowercase UUIDs. Nodes enrolled under SoHoLINK's older participant flow
+// are not converted to operator nodes; leave them out of this file (see
+// noderelay.EnrollViaOrchestrator).
 func readNodes(path string) ([]enrolledNode, error) {
 	f, err := os.Open(path)
 	if err != nil {

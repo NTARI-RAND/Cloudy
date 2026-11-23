@@ -23,7 +23,14 @@ import (
 // ID and a public key only: no person. The node ID must be a lowercase UUID
 // (ValidNodeID); anything else is refused here, before any network call.
 // A 409 means the orchestrator already holds this node with a different key,
-// or under another owner: either way nothing changed there (ErrKeyConflict).
+// or under another owner: either way nothing changed there. The error wraps
+// ErrKeyConflict and carries the orchestrator's own reason, so the operator
+// can tell the two apart.
+//
+// Nodes enrolled under the older SoHoLINK flow (POST /nodes/pubkey) belong to a
+// participant there and are not converted: registering one here gets the
+// "registered by someone else" 409. Remove such nodes from cloudyd's -nodes
+// file; a machine joins this way under a new ID its agent creates.
 func EnrollViaOrchestrator(baseURL string, decorate func(*http.Request) error) func(context.Context, identity.NodeID, ed25519.PublicKey) error {
 	client := &http.Client{Timeout: 30 * time.Second}
 	return func(ctx context.Context, node identity.NodeID, pub ed25519.PublicKey) error {
@@ -53,12 +60,13 @@ func EnrollViaOrchestrator(baseURL string, decorate func(*http.Request) error) f
 			return err
 		}
 		defer resp.Body.Close()
-		switch {
-		case resp.StatusCode == http.StatusConflict:
-			return ErrKeyConflict
-		case resp.StatusCode < 200 || resp.StatusCode >= 300:
-			msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			return fmt.Errorf("orchestrator refused key enrollment: status %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			msg := strings.TrimSpace(string(raw))
+			if resp.StatusCode == http.StatusConflict {
+				return fmt.Errorf("%w: orchestrator says: %s", ErrKeyConflict, msg)
+			}
+			return fmt.Errorf("orchestrator refused node registration: status %d: %s", resp.StatusCode, msg)
 		}
 		return nil
 	}
