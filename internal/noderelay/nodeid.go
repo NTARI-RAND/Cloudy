@@ -65,6 +65,13 @@ func LoadOrCreateNodeID(path string) (identity.NodeID, error) {
 			f.Close()
 			return "", fmt.Errorf("write node ID: %w", err)
 		}
+		// Flush to disk before the ID is used or shown: otherwise a power cut
+		// could bring the file back empty after the ID was registered, and the
+		// "safe to delete" advice below would be wrong.
+		if err := f.Sync(); err != nil {
+			f.Close()
+			return "", fmt.Errorf("write node ID: %w", err)
+		}
 		if err := f.Close(); err != nil {
 			return "", fmt.Errorf("write node ID: %w", err)
 		}

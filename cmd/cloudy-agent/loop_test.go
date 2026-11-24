@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -311,19 +312,25 @@ func TestNodeKeyFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("key file mode = %v (%v), want 0600", info.Mode().Perm(), err)
-	}
+	// A restart reloads the same key, on every platform (on Windows the mode
+	// check is skipped, so this is what keeps the agent from locking itself out).
 	k2, err := loadOrCreateKey(path)
 	if err != nil || !k1.Equal(k2) {
 		t.Fatalf("reload gave a different key (%v)", err)
 	}
-	if err := os.Chmod(path, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := loadOrCreateKey(path); err == nil {
-		t.Error("a key file readable by others was accepted")
+	// POSIX permission bits are Unix-only; Windows reports 0666 for any
+	// writable file.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("key file mode = %v (%v), want 0600", info.Mode().Perm(), err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadOrCreateKey(path); err == nil {
+			t.Error("a key file readable by others was accepted")
+		}
 	}
 	bad := filepath.Join(t.TempDir(), "bad.key")
 	if err := os.WriteFile(bad, []byte("not-hex"), 0o600); err != nil {

@@ -62,7 +62,7 @@ func EnrollViaOrchestrator(baseURL string, decorate func(*http.Request) error) f
 		defer resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			msg := strings.TrimSpace(string(raw))
+			msg := orchestratorReason(raw)
 			if resp.StatusCode == http.StatusConflict {
 				return fmt.Errorf("%w: orchestrator says: %s", ErrKeyConflict, msg)
 			}
@@ -70,4 +70,16 @@ func EnrollViaOrchestrator(baseURL string, decorate func(*http.Request) error) f
 		}
 		return nil
 	}
+}
+
+// orchestratorReason turns a refusal body into readable text: the "error"
+// field of a JSON body like {"error":"..."}, or the trimmed body as sent.
+func orchestratorReason(body []byte) string {
+	var e struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &e); err == nil && e.Error != "" {
+		return e.Error
+	}
+	return strings.TrimSpace(string(body))
 }
