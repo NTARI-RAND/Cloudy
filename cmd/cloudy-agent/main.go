@@ -32,6 +32,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"time"
 
@@ -257,7 +258,10 @@ func loadOrCreateKey(path string) (ed25519.PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read node key: %w", err)
 	}
-	if info, err := os.Stat(path); err == nil && info.Mode().Perm()&0o077 != 0 {
+	// Windows has no POSIX mode bits: Go reports every writable file as 0666
+	// and chmod only toggles read-only, so this check could never pass there.
+	// Access on Windows comes from the folder's ACL (not checked here).
+	if info, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("node key %s is readable by others (mode %o); chmod 600 it", path, info.Mode().Perm())
 	}
 	seed, err := hex.DecodeString(strings.TrimSpace(string(data)))

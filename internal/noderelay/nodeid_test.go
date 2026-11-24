@@ -125,6 +125,9 @@ func TestEnrollViaOrchestrator_StatusesAndIDCheck(t *testing.T) {
 	if !errors.Is(err, ErrKeyConflict) || !strings.Contains(err.Error(), "registered by someone else") {
 		t.Errorf("409 = %v; want ErrKeyConflict carrying the orchestrator's reason", err)
 	}
+	if err != nil && strings.Contains(err.Error(), `{"error"`) {
+		t.Errorf("409 = %v; want the reason as plain text, not raw JSON", err)
+	}
 
 	before := calls
 	if err := enroll(ctx, "cloudy-node-0", pub); err == nil {
@@ -132,5 +135,18 @@ func TestEnrollViaOrchestrator_StatusesAndIDCheck(t *testing.T) {
 	}
 	if calls != before {
 		t.Error("a short node name was sent to the orchestrator")
+	}
+}
+
+func TestOrchestratorReason(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"error":"node_id is already registered by someone else"}`: "node_id is already registered by someone else",
+		"  plain text reason \n":                                    "plain text reason",
+		`{"other":"x"}`:                                             `{"other":"x"}`,
+		"":                                                          "",
+	} {
+		if got := orchestratorReason([]byte(body)); got != want {
+			t.Errorf("orchestratorReason(%q) = %q, want %q", body, got, want)
+		}
 	}
 }
